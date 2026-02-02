@@ -15,7 +15,8 @@ public class CraneLever : MonoBehaviour
 
     void Update()
     {
-        if (canInteract && Input.GetKeyDown(KeyCode.F))
+        // Use GameInput
+        if (canInteract && GameInput.Instance != null && GameInput.Instance.GetInteractDown())
         {
             if (crane.isPlayerControlling)
             {

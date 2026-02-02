@@ -7,8 +7,8 @@ public class AudioManager : MonoBehaviour
 
     [Header("Sources")]
     public AudioSource musicSource;
-    public AudioSource sfxSource;     // General SFX
-    public AudioSource uiSource;      // UI (Unpitchable)
+    public AudioSource sfxSource;      // General SFX
+    public AudioSource uiSource;       // UI (Unpitchable)
     public AudioSource footstepSource; // Dedicated for pitch shifting steps
 
     [Header("Music")]
@@ -107,4 +107,21 @@ public class AudioManager : MonoBehaviour
     public void PlayBack() => PlayUI(menuBackClip);
     public void PlayVictory() => PlayUI(victoryClip);
     public void PlayHighScoreEntry() => PlayUI(highScoreEntryClip);
+
+    // --- SETTINGS ---
+    public void SetMusicVolume(float value)
+    {
+        musicVolume = Mathf.Clamp01(value);
+        if (musicSource) musicSource.volume = musicVolume;
+    }
+
+    public void SetSFXVolume(float value)
+    {
+        // For simple setup, we just affect the volume property of sources directly or use AudioListener for global
+        // Here we just set the volume for the next plays if we stored it, but since PlayOneShot takes volume scale,
+        // we might want a global multiplier. For now, this stub exists for the UI Slider hookup.
+        if (sfxSource) sfxSource.volume = value;
+        if (uiSource) uiSource.volume = value;
+        if (footstepSource) footstepSource.volume = value;
+    }
 }

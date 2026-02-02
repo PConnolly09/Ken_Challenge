@@ -5,29 +5,30 @@ using System.Linq;
 public class LeaderboardManager : MonoBehaviour
 {
     public static LeaderboardManager Instance;
-    private const string PREF_KEY = "LeaderboardData";
 
     [System.Serializable]
-    public class ScoreEntry
+    public class LeaderboardEntry
     {
         public string name;
-        public float time; // Lower is better
+        public float time;
+        public int down; // Added Down tracking
     }
 
     [System.Serializable]
     public class LeaderboardData
     {
-        public List<ScoreEntry> entries = new List<ScoreEntry>();
+        public List<LeaderboardEntry> entries = new List<LeaderboardEntry>();
     }
 
     public LeaderboardData data;
+    private const string PREF_KEY = "LeaderboardData_V2"; // V2 to reset old data format if needed
 
     void Awake()
     {
         if (Instance == null)
         {
             Instance = this;
-            DontDestroyOnLoad(gameObject); // Persist across scenes
+            DontDestroyOnLoad(gameObject);
             LoadScores();
         }
         else
@@ -36,27 +37,33 @@ public class LeaderboardManager : MonoBehaviour
         }
     }
 
-    public void AddScore(string playerName, float timeTaken)
+    public void AddScore(string name, float time, int down)
     {
-        ScoreEntry newEntry = new ScoreEntry { name = playerName, time = timeTaken };
-        data.entries.Add(newEntry);
+        // 1. Create Entry
+        LeaderboardEntry newEntry = new LeaderboardEntry
+        {
+            name = string.IsNullOrEmpty(name) ? "Unknown" : name,
+            time = time,
+            down = down
+        };
 
-        // Sort by fastest time (ascending)
+        // 2. Add and Sort (Lowest Time is Best)
+        data.entries.Add(newEntry);
         data.entries = data.entries.OrderBy(x => x.time).ToList();
 
-        // Keep only top 10
+        // 3. Keep Top 10
         if (data.entries.Count > 10)
         {
-            data.entries.RemoveAt(data.entries.Count - 1);
+            data.entries.RemoveRange(10, data.entries.Count - 10);
         }
 
+        // 4. Save
         SaveScores();
     }
 
     public bool IsHighScore(float time)
     {
         if (data.entries.Count < 10) return true;
-        // If time is lower (faster) than the slowest score on the board
         return time < data.entries[data.entries.Count - 1].time;
     }
 
@@ -78,5 +85,13 @@ public class LeaderboardManager : MonoBehaviour
         {
             data = new LeaderboardData();
         }
+    }
+
+    // Debug helper to clear data
+    [ContextMenu("Clear Leaderboard")]
+    public void ClearLeaderboard()
+    {
+        PlayerPrefs.DeleteKey(PREF_KEY);
+        data = new LeaderboardData();
     }
 }

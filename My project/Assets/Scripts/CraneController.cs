@@ -2,6 +2,9 @@ using UnityEngine;
 
 public class CraneController : MonoBehaviour
 {
+    // Global reference for UI to check status
+    public static CraneController ActiveCrane { get; private set; }
+
     public enum ControlMode { MoveStructure, OperateCart }
 
     [Header("Hierarchy References")]
@@ -64,25 +67,25 @@ public class CraneController : MonoBehaviour
     {
         UpdateRopes();
 
-        if (!isPlayerControlling) return;
+        if (!isPlayerControlling || GameInput.Instance == null) return;
 
-        if (Input.GetKeyDown(KeyCode.Tab))
+        if (GameInput.Instance.GetCraneModeSwitch())
         {
             currentMode = (currentMode == ControlMode.MoveStructure)
                 ? ControlMode.OperateCart
                 : ControlMode.MoveStructure;
         }
 
-        // Handle Escape/F internally if needed, but CraneLever usually handles this
-        if (Input.GetKeyDown(KeyCode.Escape)) ExitControl();
+        if (GameInput.Instance.GetPauseDown()) ExitControl();
 
         HandleMovement();
     }
 
     void HandleMovement()
     {
-        float hInput = Input.GetAxisRaw("Horizontal");
-        float vInput = Input.GetAxisRaw("Vertical");
+        Vector2 input = GameInput.Instance.GetMovementInput();
+        float hInput = input.x;
+        float vInput = input.y;
 
         if (currentMode == ControlMode.MoveStructure)
         {
@@ -95,7 +98,6 @@ public class CraneController : MonoBehaviour
         }
         else
         {
-            // Cart
             if (cart != null && Mathf.Abs(hInput) > 0.01f)
             {
                 float nextLocalX = cart.localPosition.x + (hInput * cartSpeed * Time.deltaTime);
@@ -103,7 +105,6 @@ public class CraneController : MonoBehaviour
                 cart.localPosition = new Vector3(nextLocalX, cart.localPosition.y, cart.localPosition.z);
             }
 
-            // Grabber
             if (grabber != null && Mathf.Abs(vInput) > 0.01f)
             {
                 float nextLocalY = grabber.localPosition.y + (vInput * hoistSpeed * Time.deltaTime);
@@ -111,8 +112,7 @@ public class CraneController : MonoBehaviour
                 grabber.localPosition = new Vector3(grabberInitialLocalX, nextLocalY, grabber.localPosition.z);
             }
 
-            // Claw Action
-            if (Input.GetKeyDown(KeyCode.Space))
+            if (GameInput.Instance.GetJumpDown())
             {
                 if (currentObject) Release();
                 else AttemptGrab();
@@ -130,21 +130,16 @@ public class CraneController : MonoBehaviour
             currentObject = hit.gameObject;
             currentObjectRb = currentObject.GetComponent<Rigidbody2D>();
 
-            // 1. Disable Physics on the object so it doesn't fight the crane
             if (currentObjectRb)
             {
                 currentObjectRb.simulated = false;
                 currentObjectRb.linearVelocity = Vector2.zero;
             }
 
-            // 2. Parent it to the Grabber so it moves 1:1
             currentObject.transform.SetParent(grabber);
+            currentObject.transform.SetPositionAndRotation(grabPoint.position, Quaternion.identity);
 
-            // 3. Snap position to the grab point (optional, looks cleaner)
-            currentObject.transform.position = grabPoint.position;
-
-            // Keep rotation upright?
-            currentObject.transform.rotation = Quaternion.identity;
+            if (currentObject.TryGetComponent<HeavyObject>(out var heavy)) heavy.OnGrab();
         }
     }
 
@@ -154,16 +149,14 @@ public class CraneController : MonoBehaviour
         {
             Debug.Log("CRANE: Dropped " + currentObject.name);
 
-            // 1. Unparent
+            if (currentObject.TryGetComponent<HeavyObject>(out var heavy)) heavy.OnRelease();
+
             currentObject.transform.SetParent(null);
 
-            // 2. Re-enable Physics
             if (currentObjectRb)
             {
                 currentObjectRb.simulated = true;
                 currentObjectRb.WakeUp();
-
-                // Optional: Add downward force for "Crush" effect immediately
                 currentObjectRb.AddForce(Vector2.down * 2f, ForceMode2D.Impulse);
             }
         }
@@ -185,6 +178,7 @@ public class CraneController : MonoBehaviour
     public void EnterControl(PlayerController player)
     {
         isPlayerControlling = true;
+        ActiveCrane = this; // Register as global active crane for UI
         playerRef = player;
         player.enabled = false;
 
@@ -200,6 +194,8 @@ public class CraneController : MonoBehaviour
     public void ExitControl()
     {
         isPlayerControlling = false;
+        if (ActiveCrane == this) ActiveCrane = null; // Deregister
+
         if (playerRef)
         {
             if (playerRb)
@@ -222,5 +218,3 @@ public class CraneController : MonoBehaviour
         }
     }
 }
-
-

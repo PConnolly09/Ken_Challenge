@@ -5,7 +5,6 @@ public class MinionEnemy : EnemyAI
 
     [Header("Minion Jump")]
     public float jumpForce = 12f;
-    public float jumpCooldown = 2f;
 
     protected override void Chase()
     {
@@ -17,6 +16,14 @@ public class MinionEnemy : EnemyAI
         if (Mathf.Abs(xDiff) > 0.2f)
         {
             Move(Mathf.Sign(xDiff), moveSpeed * 1.2f);
+
+            // Inside MinionEnemy.Chase()
+            if (CheckWallAhead())
+            {
+                // Jump logic here
+                rb.AddForce(Vector2.up * jumpForce, ForceMode2D.Impulse);
+                // Don't flip immediately, try to clear it
+            }
         }
         else
         {

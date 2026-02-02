@@ -33,6 +33,14 @@ public class PlayerStats : ScriptableObject
     [Tooltip("Bonus height added based on horizontal momentum")]
     public float momentumJumpBonus = 1.5f;
 
+    [Header("APEX MODIFIERS (Hang Time)")]
+    [Tooltip("Vertical speed threshold where hang time triggers (e.g., when velocity is between -2 and 2).")]
+    public float apexThreshold = 2.0f;
+    [Tooltip("Gravity multiplier at apex. Lower (0.5) = floatier peak.")]
+    public float apexGravityMult = 0.4f;
+    [Tooltip("Air acceleration multiplier at apex. Allows player to steer better at the top of the jump.")]
+    public float apexAirAccelMult = 1.5f;
+
     [Header("ASSISTS")]
     [Tooltip("Grace period to jump after falling off a ledge")]
     public float coyoteTime = 0.1f;

@@ -16,18 +16,14 @@ public class EffectManager : MonoBehaviour
     public GameObject stiffArmImpactPrefab;
     public GameObject tackleImpactPrefab;
     public GameObject squishEffectPrefab;
-
-    // This was the missing definition causing the error:
     public GameObject attachPoofPrefab;
 
     [Header("Telegraphs (Indicators)")]
     public GameObject tackleTelegraphPrefab;
     public GameObject stripTelegraphPrefab;
 
-    // Fix: Changed from Property to Method so BruteEnemy can call it like TackleTelegraph(...)
     public void TackleTelegraph(Transform parent, float duration)
     {
-        // Plays the telegraph slightly above the enemy (1.5 units up)
         PlayAttachedEffect(tackleTelegraphPrefab, parent, Vector3.up * 1.5f, duration);
     }
 
@@ -45,16 +41,20 @@ public class EffectManager : MonoBehaviour
         else Destroy(gameObject);
     }
 
-    public void PlayEffect(GameObject prefab, Vector3 position, float scale = 1f)
+    // FIX: Added duration parameter (default 3s). 
+    // Usage: PlayEffect(prefab, pos, 1f, 0.5f) for short effects.
+    public void PlayEffect(GameObject prefab, Vector3 position, float scale = 1f, float duration = 3f)
     {
         if (prefab == null) return;
 
-        // Force Z to -5 so it renders in front of background elements
+        // Custom duration override for Blood Splatter to reduce clutter
+        if (prefab == bloodSplatterPrefab) duration = 1.0f;
+
         Vector3 spawnPos = new Vector3(position.x, position.y, -5f);
         GameObject vfx = Instantiate(prefab, spawnPos, Quaternion.identity);
         vfx.transform.localScale *= scale;
 
-        Destroy(vfx, 3f);
+        Destroy(vfx, duration);
     }
 
     public void PlayAttachedEffect(GameObject prefab, Transform parent, Vector3 offset, float duration)

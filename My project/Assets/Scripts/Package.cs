@@ -7,6 +7,7 @@ public class Package : MonoBehaviour
     private Rigidbody2D rb;
     private Collider2D coll;
     private Transform targetAnchor;
+    private Vector3 startPosition;
 
     [Header("Status")]
     public bool isHeld = false;
@@ -36,6 +37,8 @@ public class Package : MonoBehaviour
 
     void Start()
     {
+        startPosition = transform.position;
+
         if (startHeld)
         {
             GameObject player = GameObject.FindGameObjectWithTag("Player");
@@ -48,23 +51,16 @@ public class Package : MonoBehaviour
         }
         else
         {
-            // FIX: Silent initialization. 
-            // We set physics properties directly instead of calling SetHeld(false), 
-            // which avoids triggering the Fumble Event on scene start.
             isHeld = false;
             transform.SetParent(null);
-
             rb.simulated = true;
             coll.enabled = true;
             coll.isTrigger = false;
-
             rb.gravityScale = dropGravity;
             rb.linearDamping = airDrag;
-
-            // Ensure it sits still
             rb.linearVelocity = Vector2.zero;
             rb.angularVelocity = 0f;
-            coll.sharedMaterial = settlingMaterial; // Start dead so it doesn't bounce away
+            coll.sharedMaterial = settlingMaterial;
         }
     }
 
@@ -78,8 +74,8 @@ public class Package : MonoBehaviour
 
         if (isHeld && targetAnchor != null)
         {
-            transform.position = targetAnchor.position;
-            transform.rotation = targetAnchor.rotation;
+            // FIX: UNT0022 - Optimize dual assignment
+            transform.SetPositionAndRotation(targetAnchor.position, targetAnchor.rotation);
         }
     }
 
@@ -95,6 +91,19 @@ public class Package : MonoBehaviour
                     coll.sharedMaterial = settlingMaterial;
             }
         }
+    }
+
+    public void Respawn()
+    {
+        SetHeld(false, null, null);
+        rb.linearVelocity = Vector2.zero;
+        rb.angularVelocity = 0f;
+        // FIX: UNT0022 - Optimize dual assignment
+        transform.SetPositionAndRotation(startPosition, Quaternion.identity);
+        coll.sharedMaterial = settlingMaterial;
+
+        if (GameManager.Instance)
+            GameManager.Instance.RecoverFumble();
     }
 
     public void SetHeld(bool held, Transform anchor, MonoBehaviour holder)
@@ -122,15 +131,13 @@ public class Package : MonoBehaviour
 
             rb.gravityScale = dropGravity;
             rb.linearDamping = airDrag;
-            coll.sharedMaterial = fumbleMaterial; // Bounce!
+            coll.sharedMaterial = fumbleMaterial;
             rb.WakeUp();
 
-            // POP
             Vector2 fumbleDir = new Vector2(Random.Range(-0.6f, 0.6f), 1f).normalized;
             rb.AddForce(fumbleDir * 12f, ForceMode2D.Impulse);
             rb.AddTorque(Random.Range(-50f, 50f), ForceMode2D.Impulse);
 
-            // Trigger Event
             if (GameManager.Instance)
                 GameManager.Instance.StartFumbleEvent(this.transform);
         }

@@ -5,13 +5,16 @@ using System.Collections;
 [RequireComponent(typeof(CapsuleCollider2D))]
 public abstract class EnemyAI : MonoBehaviour
 {
-    // ... [Settings headers match previous] ...
     [Header("Base AI Settings")]
     [Range(0.1f, 20f)] public float moveSpeed = 3f;
     public float detectionRange = 10f;
     public LayerMask obstacleLayer;
-    // Removed local prefab reference to use Manager instead
-    // public GameObject bloodSplatterPrefab; 
+    public GameObject bloodSplatterPrefab;
+
+    [Header("Navigation & Jumps")]
+    public float navigationJumpForce = 8f;
+    public float jumpCooldown = 1.5f;
+    private float lastJumpTime;
 
     [Header("Patrol Settings")]
     public Transform[] patrolPoints;
@@ -19,11 +22,21 @@ public abstract class EnemyAI : MonoBehaviour
     protected float patrolWaitTimer = 0f;
     public float waitAtWaypointTime = 1f;
 
+    [Header("Pathfinding & Stuck Detection")]
+    public float giveUpDuration = 2.0f;
+    private float targetIgnoreTimer;
+
+    // FIX: Reduced stuck threshold for snappier response
+    private float stuckCheckTimer = 0f;
+    private float stuckThreshold = 0.15f;
+    private float lastXPosition;
+
     [Header("Package Logic")]
     public bool carriesPackage = false;
     public Transform packageHoldPoint;
+    public float fleeRangeMultiplier = 2.0f;
 
-    // ... [State Variables match previous] ...
+    [Header("State Info")]
     protected bool movingRight = true;
     protected Rigidbody2D rb;
     protected Transform playerTransform;
@@ -31,15 +44,23 @@ public abstract class EnemyAI : MonoBehaviour
     protected bool isChasing = false;
     public bool isKnockedBack = false;
     protected Vector3 startPos;
+    private Collider2D selfCollider;
 
     protected virtual void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
+        selfCollider = GetComponent<Collider2D>();
         rb.gravityScale = 4f;
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
 
+        if (selfCollider)
+        {
+            selfCollider.sharedMaterial = new PhysicsMaterial2D("EnemyZeroFriction") { friction = 0f, bounciness = 0f };
+        }
+
         startPos = transform.position;
+        lastXPosition = transform.position.x;
 
         GameObject p = GameObject.FindGameObjectWithTag("Player");
         if (p) playerTransform = p.transform;
@@ -47,11 +68,15 @@ public abstract class EnemyAI : MonoBehaviour
         int layer = gameObject.layer;
         Physics2D.IgnoreLayerCollision(layer, layer, true);
         Physics2D.queriesStartInColliders = false;
+
+        movingRight = transform.localScale.x > 0;
     }
 
     protected virtual void FixedUpdate()
     {
         if (isKnockedBack || !enabled) return;
+
+        MonitorStuckState();
 
         if (carriesPackage)
         {
@@ -59,11 +84,27 @@ public abstract class EnemyAI : MonoBehaviour
             return;
         }
 
+        if (targetIgnoreTimer > 0)
+        {
+            targetIgnoreTimer -= Time.fixedDeltaTime;
+            isChasing = false;
+            currentTarget = null;
+            Patrol();
+            return;
+        }
+
         DetermineTarget();
 
         if (isChasing && currentTarget != null)
         {
-            Chase();
+            if (CheckWallAhead())
+            {
+                if (!AttemptNavigationJump()) ForceGiveUp();
+            }
+            else
+            {
+                Chase();
+            }
         }
         else
         {
@@ -71,7 +112,83 @@ public abstract class EnemyAI : MonoBehaviour
         }
     }
 
-    // ... [DetermineTarget, RunAway, Move, Chase, ResetState, TakeHit, DropPackage, KnockbackRoutine, Flip match previous] ...
+    private void MonitorStuckState()
+    {
+        // Only monitor if we intend to move
+        if (Mathf.Abs(rb.linearVelocity.x) > 0.1f || isChasing || carriesPackage)
+        {
+            float distMoved = Mathf.Abs(transform.position.x - lastXPosition);
+
+            // If we are physically stationary
+            if (distMoved < 0.02f)
+            {
+                stuckCheckTimer += Time.fixedDeltaTime;
+                if (stuckCheckTimer > stuckThreshold)
+                {
+                    // If we can't jump, flip immediately
+                    if (!AttemptNavigationJump())
+                    {
+                        Flip();
+                        if (isChasing) ForceGiveUp();
+                    }
+                    stuckCheckTimer = 0;
+                }
+            }
+            else
+            {
+                stuckCheckTimer = 0;
+            }
+        }
+        lastXPosition = transform.position.x;
+    }
+
+    protected bool CheckWallAhead()
+    {
+        Vector2 origin = (Vector2)transform.position + new Vector2(0, 0.5f);
+        Vector2 dir = movingRight ? Vector2.right : Vector2.left;
+        RaycastHit2D hit = Physics2D.Raycast(origin, dir, 1.0f, obstacleLayer);
+        return hit.collider != null;
+    }
+
+    protected bool CheckHazardAhead()
+    {
+        Vector2 origin = (Vector2)transform.position + (movingRight ? Vector2.right : Vector2.left) * 0.8f;
+        RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, 1.5f);
+
+        if (hit.collider != null)
+        {
+            if (hit.collider.GetComponent<WaterHazard>()) return true;
+            if (hit.collider.CompareTag("Water")) return true;
+        }
+        else
+        {
+            return true; // Cliff
+        }
+
+        return false;
+    }
+
+    protected bool AttemptNavigationJump()
+    {
+        if (Time.time < lastJumpTime + jumpCooldown) return false;
+
+        bool isGrounded = Physics2D.Raycast(transform.position, Vector2.down, 1.1f, obstacleLayer);
+
+        if (isGrounded)
+        {
+            rb.linearVelocity = new Vector2(rb.linearVelocity.x, navigationJumpForce);
+            lastJumpTime = Time.time;
+            return true;
+        }
+        return false;
+    }
+
+    protected void ForceGiveUp()
+    {
+        targetIgnoreTimer = giveUpDuration;
+        isChasing = false;
+        Flip();
+    }
 
     protected void DetermineTarget()
     {
@@ -91,7 +208,8 @@ public abstract class EnemyAI : MonoBehaviour
             if (dist < detectionRange)
             {
                 Vector2 dir = (playerTransform.position - transform.position).normalized;
-                RaycastHit2D hit = Physics2D.Raycast(transform.position, dir, dist, obstacleLayer);
+                RaycastHit2D hit = Physics2D.Raycast(transform.position + Vector3.up * 0.5f, dir, dist, obstacleLayer);
+
                 if (hit.collider == null)
                 {
                     currentTarget = playerTransform;
@@ -107,6 +225,18 @@ public abstract class EnemyAI : MonoBehaviour
     protected virtual void Patrol()
     {
         if (patrolPoints == null || patrolPoints.Length == 0) return;
+
+        if (CheckHazardAhead())
+        {
+            Flip();
+            return;
+        }
+
+        if (CheckWallAhead())
+        {
+            if (!AttemptNavigationJump()) Flip();
+            return;
+        }
 
         Transform targetPoint = patrolPoints[currentPatrolIndex];
         float dist = Mathf.Abs(transform.position.x - targetPoint.position.x);
@@ -131,13 +261,36 @@ public abstract class EnemyAI : MonoBehaviour
     protected void RunAway()
     {
         if (playerTransform == null) return;
+
+        if (CheckHazardAhead())
+        {
+            rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+            Flip();
+            return;
+        }
+
+        if (CheckWallAhead())
+        {
+            if (!AttemptNavigationJump()) Flip();
+        }
+
         float dir = (transform.position.x > playerTransform.position.x) ? 1 : -1;
-        Move(dir, moveSpeed * 1.5f);
+        float dist = Vector2.Distance(transform.position, playerTransform.position);
+
+        if (dist > detectionRange * fleeRangeMultiplier)
+        {
+            rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+        }
+        else
+        {
+            Move(dir, moveSpeed * 1.5f);
+        }
     }
 
     protected void Move(float direction, float speed)
     {
         rb.linearVelocity = new Vector2(direction * speed, rb.linearVelocity.y);
+
         if (direction > 0 && !movingRight) Flip();
         else if (direction < 0 && movingRight) Flip();
     }
@@ -193,51 +346,30 @@ public abstract class EnemyAI : MonoBehaviour
         }
         if (isKnockedBack && ((1 << collision.gameObject.layer) & obstacleLayer) != 0)
         {
-            // FIX: Use EffectManager instead of local prefab reference
-            if (EffectManager.Instance)
-            {
-                // Spawn slightly in front (z = -5) to ensure visibility
-                Vector3 spawnPos = new Vector3(collision.contacts[0].point.x, collision.contacts[0].point.y, -5f);
-                EffectManager.Instance.PlayEffect(EffectManager.Instance.bloodSplatterPrefab, spawnPos);
-            }
+            if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.bloodSplatterPrefab, collision.contacts[0].point);
             if (carriesPackage) DropPackage();
             Destroy(gameObject);
         }
     }
 
-    // --- NEW: Visual Debugging for Waypoints ---
     protected virtual void OnDrawGizmos()
     {
-        // Draw the Detection Range
-        Gizmos.color = new Color(1, 1, 0, 0.2f); // Yellow transparent
+        Gizmos.color = new Color(1, 1, 0, 0.2f);
         Gizmos.DrawWireSphere(transform.position, detectionRange);
 
-        // Draw Patrol Path
-        if (patrolPoints != null && patrolPoints.Length > 0)
+        Gizmos.color = Color.red;
+        Vector3 origin = transform.position + new Vector3(0, 0.5f, 0);
+        Vector3 dir = movingRight ? Vector3.right : Vector3.left;
+        Gizmos.DrawRay(origin, dir * 1.0f);
+
+        Gizmos.color = Color.blue;
+        Vector3 hazardOrigin = transform.position + (movingRight ? Vector3.right : Vector3.left) * 0.8f;
+        Gizmos.DrawRay(hazardOrigin, Vector3.down * 1.5f);
+
+        if (patrolPoints != null)
         {
             Gizmos.color = Color.cyan;
-            for (int i = 0; i < patrolPoints.Length; i++)
-            {
-                if (patrolPoints[i] != null)
-                {
-                    // Draw the point
-                    Gizmos.DrawSphere(patrolPoints[i].position, 0.3f);
-
-                    // Draw line to next point
-                    Transform nextPoint = patrolPoints[(i + 1) % patrolPoints.Length];
-                    if (nextPoint != null)
-                    {
-                        Gizmos.DrawLine(patrolPoints[i].position, nextPoint.position);
-                    }
-                }
-            }
-
-            // Draw line from Enemy to current target point
-            if (Application.isPlaying && patrolPoints[currentPatrolIndex] != null)
-            {
-                Gizmos.color = Color.green;
-                Gizmos.DrawLine(transform.position, patrolPoints[currentPatrolIndex].position);
-            }
+            foreach (var p in patrolPoints) if (p) Gizmos.DrawSphere(p.position, 0.3f);
         }
     }
 }

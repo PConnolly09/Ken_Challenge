@@ -12,36 +12,31 @@ public class CameraController : MonoBehaviour
     private Rigidbody2D playerRb;
 
     [Header("Zoom & Framing")]
-    [Tooltip("Default Zoom")]
     public float orthographicSize = 6f;
 
-    [Header("Directional Framing (Hysteresis)")]
-    [Tooltip("Screen X when moving Right (Standard). E.g. -0.2 (Player on Left)")]
+    [Header("Directional Framing")]
     public float forwardBias = -0.2f;
-    [Tooltip("Screen X when moving Left (Backpedal). E.g. 0.2 (Player on Right)")]
     public float backwardBias = 0.2f;
-    [Tooltip("Speed required to switch camera sides.")]
-    public float switchThreshold = 8f;
-    [Tooltip("Time required moving in new direction before camera shifts.")]
+    public float switchThreshold = 0.1f;
     public float turnDelay = 0.5f;
-    [Tooltip("How fast the camera pans to the new side.")]
     public float biasShiftSpeed = .75f;
 
-    // State tracking
     private float currentXBias;
     private bool isFacingRight = true;
     private float turnTimer = 0f;
     private float targetSize;
-    private float defaultScreenXBias;
-    private bool isCraneView = false;
 
-    [Header("Grounded Vertical Logic")]
+    // FLAGS
+    private bool isCraneView = false;
+    private bool isFumbleMode = false;
+
+    [Header("Vertical")]
     public float verticalDamping = 0.0f;
     public float verticalDeadZone = 0.3f;
     public float screenYBias = 0.2f;
     public float horizontalDamping = 0.5f;
 
-    [Header("Look Down Logic")]
+    [Header("Look Down")]
     public float lookDownOffset = -4f;
     public float lookShiftSpeed = 2f;
     private float currentYOffset = 0f;
@@ -58,7 +53,6 @@ public class CameraController : MonoBehaviour
         {
             positionComposer = virtualCamera.GetComponent<CinemachinePositionComposer>();
             currentXBias = forwardBias;
-            defaultScreenXBias = forwardBias;
             targetSize = orthographicSize;
             ApplyCameraSettings();
         }
@@ -71,10 +65,16 @@ public class CameraController : MonoBehaviour
             virtualCamera.Lens.OrthographicSize = Mathf.Lerp(virtualCamera.Lens.OrthographicSize, targetSize, Time.deltaTime * 2f);
         }
 
-        if (!isCraneView)
+        if (!isCraneView && !isFumbleMode)
         {
             HandleDirectionalFraming();
             HandleLookDown();
+        }
+        else if (isFumbleMode)
+        {
+            // Center the camera during fumble for stability
+            currentXBias = Mathf.MoveTowards(currentXBias, 0f, biasShiftSpeed * Time.deltaTime);
+            UpdateComposer();
         }
     }
 
@@ -85,37 +85,25 @@ public class CameraController : MonoBehaviour
         float velocityX = playerRb.linearVelocity.x;
         bool tryingToSwitch = false;
 
-        // Check if moving against current facing
         if (isFacingRight && velocityX < -switchThreshold)
         {
             tryingToSwitch = true;
             turnTimer += Time.deltaTime;
-            if (turnTimer > turnDelay)
-            {
-                isFacingRight = false;
-                turnTimer = 0f;
-            }
+            if (turnTimer > turnDelay) { isFacingRight = false; turnTimer = 0f; }
         }
         else if (!isFacingRight && velocityX > switchThreshold)
         {
             tryingToSwitch = true;
             turnTimer += Time.deltaTime;
-            if (turnTimer > turnDelay)
-            {
-                isFacingRight = true;
-                turnTimer = 0f;
-            }
+            if (turnTimer > turnDelay) { isFacingRight = true; turnTimer = 0f; }
         }
 
-        // Reset timer if not consistently moving in new direction
         if (!tryingToSwitch) turnTimer = 0f;
 
         float targetX = isFacingRight ? forwardBias : backwardBias;
         currentXBias = Mathf.MoveTowards(currentXBias, targetX, biasShiftSpeed * Time.deltaTime);
 
-        var comp = positionComposer.Composition;
-        comp.ScreenPosition = new Vector2(currentXBias, screenYBias);
-        positionComposer.Composition = comp;
+        UpdateComposer();
     }
 
     private void HandleLookDown()
@@ -123,13 +111,26 @@ public class CameraController : MonoBehaviour
         if (playerRb == null || positionComposer == null) return;
 
         float targetOffset = 0f;
-        bool manualLookDown = Input.GetAxisRaw("Vertical") < -0.5f;
-        bool fallingFast = playerRb.linearVelocity.y < -12f;
+        // GameInput support implied or fallback to axis
+        if (GameInput.Instance != null)
+        {
+            if (GameInput.Instance.GetMovementInput().y < -0.5f) targetOffset = lookDownOffset;
+        }
+        else if (Input.GetAxisRaw("Vertical") < -0.5f) targetOffset = lookDownOffset;
 
-        if (manualLookDown || fallingFast) targetOffset = lookDownOffset;
+        bool fallingFast = playerRb.linearVelocity.y < -12f;
+        if (fallingFast) targetOffset = lookDownOffset;
 
         currentYOffset = Mathf.Lerp(currentYOffset, targetOffset, Time.deltaTime * lookShiftSpeed);
         positionComposer.TargetOffset = new Vector3(0, currentYOffset, 0);
+    }
+
+    private void UpdateComposer()
+    {
+        if (positionComposer == null) return;
+        var comp = positionComposer.Composition;
+        comp.ScreenPosition = new Vector2(currentXBias, screenYBias);
+        positionComposer.Composition = comp;
     }
 
     public void SetCraneView(bool active)
@@ -139,18 +140,30 @@ public class CameraController : MonoBehaviour
         {
             targetSize = 10f;
             currentXBias = -0.4f;
-            if (positionComposer)
-            {
-                var comp = positionComposer.Composition;
-                comp.ScreenPosition = new Vector2(currentXBias, screenYBias);
-                positionComposer.Composition = comp;
-            }
+            UpdateComposer();
         }
         else
         {
             targetSize = orthographicSize;
             isFacingRight = true;
             currentXBias = forwardBias;
+        }
+    }
+
+    // FIX: New Method for Fumble Mode
+    public void SetFumbleMode(bool active)
+    {
+        isFumbleMode = active;
+        if (active)
+        {
+            // Zoom out slightly and center
+            targetSize = orthographicSize * 1.2f;
+            // Bias will be zeroed in Update
+        }
+        else
+        {
+            targetSize = orthographicSize;
+            currentXBias = isFacingRight ? forwardBias : backwardBias;
         }
     }
 
@@ -172,14 +185,5 @@ public class CameraController : MonoBehaviour
     public void Shake(float force = 1f)
     {
         if (globalImpulseSource) globalImpulseSource.GenerateImpulse(Vector3.one * force);
-    }
-
-    private void OnValidate()
-    {
-        if (virtualCamera != null && positionComposer == null)
-            positionComposer = virtualCamera.GetComponent<CinemachinePositionComposer>();
-
-        if (positionComposer != null)
-            ApplyCameraSettings();
     }
 }
