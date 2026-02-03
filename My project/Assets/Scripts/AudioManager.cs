@@ -14,7 +14,6 @@ public class AudioManager : MonoBehaviour
     [Header("Music")]
     public List<AudioClip> musicTracks;
     [Range(0f, 1f)] public float musicVolume = 0.5f;
-    [Range(0f, 1f)] public float sfxVolume = 0.5f;
 
     [Header("Player Movement")]
     public AudioClip[] footstepClips;
@@ -46,25 +45,21 @@ public class AudioManager : MonoBehaviour
 
     private int currentTrackIndex = 0;
 
+    // IMPACT LOGIC
+    private float nextImpactTime = 0f;
+
     void Awake()
     {
         if (Instance == null) { Instance = this; DontDestroyOnLoad(gameObject); InitializeSources(); }
         else Destroy(gameObject);
     }
 
-    void Start()
-    {
-        // Initialize volumes immediately
-        UpdateSourceVolumes();
-        if (musicTracks.Count > 0) PlayNextTrack();
-    }
+    void Start() { if (musicTracks.Count > 0) PlayNextTrack(); }
 
     void Update()
     {
         if (!musicSource.isPlaying && musicTracks.Count > 0) PlayNextTrack();
-
-        // Force update music volume in real-time for slider feedback
-        if (musicSource.volume != musicVolume) musicSource.volume = musicVolume;
+        musicSource.volume = musicVolume;
     }
 
     private void InitializeSources()
@@ -73,21 +68,10 @@ public class AudioManager : MonoBehaviour
         if (!sfxSource) sfxSource = gameObject.AddComponent<AudioSource>();
         if (!uiSource) uiSource = gameObject.AddComponent<AudioSource>();
         if (!footstepSource) footstepSource = gameObject.AddComponent<AudioSource>();
-
-        UpdateSourceVolumes();
-    }
-
-    private void UpdateSourceVolumes()
-    {
-        if (musicSource) musicSource.volume = musicVolume;
-        if (sfxSource) sfxSource.volume = sfxVolume;
-        if (uiSource) uiSource.volume = sfxVolume;
-        if (footstepSource) footstepSource.volume = sfxVolume;
     }
 
     public void PlayNextTrack()
     {
-        if (musicTracks.Count == 0) return;
         currentTrackIndex = (currentTrackIndex + 1) % musicTracks.Count;
         musicSource.clip = musicTracks[currentTrackIndex];
         musicSource.Play();
@@ -95,16 +79,29 @@ public class AudioManager : MonoBehaviour
 
     // --- GENERIC HELPERS ---
 
-    public void PlayOneShot(AudioClip clip, float volScale = 1f)
+    public void PlayOneShot(AudioClip clip, float vol = 1f)
     {
-        // Note: PlayOneShot scales volume by the Source volume automatically.
-        // We pass the relative scale (e.g. 0.5 for a quiet sound)
-        if (clip) sfxSource.PlayOneShot(clip, volScale);
+        if (clip) sfxSource.PlayOneShot(clip, vol);
     }
 
-    public void PlayUI(AudioClip clip, float volScale = 1f)
+    public void PlayUI(AudioClip clip, float vol = 1f)
     {
-        if (clip) uiSource.PlayOneShot(clip, volScale);
+        if (clip) uiSource.PlayOneShot(clip, vol);
+    }
+
+    // --- IMPACT SFX LOGIC ---
+    public void PlayImpact(AudioClip clip)
+    {
+        if (clip == null) return;
+
+        // Debounce: Only play if the previous impact has finished
+        if (Time.time < nextImpactTime) return;
+
+        // Play quietly (0.4 scale)
+        PlayOneShot(clip, 0.4f);
+
+        // Prevent another impact until this one finishes
+        nextImpactTime = Time.time + clip.length;
     }
 
     // --- FOOTSTEPS ---
@@ -116,7 +113,6 @@ public class AudioManager : MonoBehaviour
         if (clips != null && clips.Length > 0)
         {
             AudioClip clip = clips[Random.Range(0, clips.Length)];
-            // Randomize pitch slightly for variety
             footstepSource.pitch = Random.Range(0.9f, 1.1f);
             footstepSource.PlayOneShot(clip, 0.6f);
         }
@@ -129,21 +125,17 @@ public class AudioManager : MonoBehaviour
     public void PlayVictory() => PlayUI(victoryClip);
     public void PlayHighScoreEntry() => PlayUI(highScoreEntryClip);
 
-    // --- SETTINGS (Called by UI Sliders) ---
-
+    // --- SETTINGS ---
     public void SetMusicVolume(float value)
     {
-        // IMPORTANT: Ensure your UI Slider is set to Min: 0, Max: 1
         musicVolume = Mathf.Clamp01(value);
         if (musicSource) musicSource.volume = musicVolume;
     }
 
     public void SetSFXVolume(float value)
     {
-        // IMPORTANT: Ensure your UI Slider is set to Min: 0, Max: 1
-        sfxVolume = Mathf.Clamp01(value);
-        if (sfxSource) sfxSource.volume = sfxVolume;
-        if (uiSource) uiSource.volume = sfxVolume;
-        if (footstepSource) footstepSource.volume = sfxVolume;
+        if (sfxSource) sfxSource.volume = value;
+        if (uiSource) uiSource.volume = value;
+        if (footstepSource) footstepSource.volume = value;
     }
 }

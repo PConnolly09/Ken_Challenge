@@ -55,7 +55,7 @@ public class BruteEnemy : EnemyAI
         // WIND UP (Stop and telegraph)
         rb.linearVelocity = Vector2.zero;
         if (EffectManager.Instance) EffectManager.Instance.TackleTelegraph(transform, 0.5f);
-        yield return new WaitForSeconds(0.5f);
+        yield return new WaitForSeconds(1.5f);
 
         // LUNGE
         if (currentTarget != null)
@@ -80,11 +80,12 @@ public class BruteEnemy : EnemyAI
         {
             if (col.gameObject.TryGetComponent<PlayerController>(out var player))
             {
+
                 // If we hit the player, smash them
-                player.SetProne(1.2f);
                 // Force enter recovery immediately so we don't stand on them
                 if (isTackling)
                 {
+                    player.SetProne(1.2f);
                     isTackling = false;
                     isRecovering = true;
                     StartCoroutine(ManualRecoveryRoutine());

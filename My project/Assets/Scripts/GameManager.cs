@@ -499,8 +499,6 @@ public class GameManager : MonoBehaviour
         if (highScoreInputGroup != null)
         {
             highScoreInputGroup.SetActive(isHighScore);
-            if (isHighScore && victoryTitleText) victoryTitleText.text = "NEW RECORD!";
-            else if (victoryTitleText) victoryTitleText.text = "TOUCHDOWN!";
         }
         else if (nameInputField != null)
         {
@@ -554,20 +552,20 @@ public class GameManager : MonoBehaviour
     public void OpenPauseSettings() { if (pausePanel) pausePanel.SetActive(false); if (pauseSettingsPanel) pauseSettingsPanel.SetActive(true); }
     public void ClosePauseSettings() { if (pauseSettingsPanel) pauseSettingsPanel.SetActive(false); if (pausePanel) pausePanel.SetActive(true); }
 
-    void OnGUI()
-    {
-        if (!debugMode) return;
-        GUIStyle style = new GUIStyle(); style.fontSize = 20; style.normal.textColor = Color.yellow; style.fontStyle = FontStyle.Bold;
-        GUILayout.BeginArea(new Rect(10, 10, 400, 350), "DEBUG INFO", GUI.skin.window);
-        GUILayout.Label($"State: {currentState}", style);
-        string hudStatus = (inGameHUD != null) ? inGameHUD.activeSelf.ToString() : "NULL REF";
-        GUILayout.Label($"HUD Active: {hudStatus}", style);
+    //void OnGUI()
+    //{
+    //    if (!debugMode) return;
+    //    GUIStyle style = new GUIStyle(); style.fontSize = 20; style.normal.textColor = Color.yellow; style.fontStyle = FontStyle.Bold;
+    //    GUILayout.BeginArea(new Rect(10, 10, 400, 350), "DEBUG INFO", GUI.skin.window);
+    //    GUILayout.Label($"State: {currentState}", style);
+    //    string hudStatus = (inGameHUD != null) ? inGameHUD.activeSelf.ToString() : "NULL REF";
+    //    GUILayout.Label($"HUD Active: {hudStatus}", style);
 
-        GUILayout.Label("LOGS:", style);
-        for (int i = Mathf.Max(0, debugLog.Count - 3); i < debugLog.Count; i++)
-            GUILayout.Label(debugLog[i], style);
+    //    GUILayout.Label("LOGS:", style);
+    //    for (int i = Mathf.Max(0, debugLog.Count - 3); i < debugLog.Count; i++)
+    //        GUILayout.Label(debugLog[i], style);
 
-        if (GUILayout.Button("Force Restart")) RestartLevel();
-        GUILayout.EndArea();
-    }
+    //    if (GUILayout.Button("Force Restart")) RestartLevel();
+    //    GUILayout.EndArea();
+    //}
 }
