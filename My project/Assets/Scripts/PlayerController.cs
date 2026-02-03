@@ -27,6 +27,7 @@ public class PlayerController : MonoBehaviour
     public AudioClip stiffArmSfx;
     public AudioClip fumbleSfx;
     public AudioClip impactSfx;
+    [Range(0.1f, 1f)] public float footstepInterval = 0.35f;
 
     // --- STATE ---
     public bool IsGrounded { get; private set; }
@@ -57,11 +58,14 @@ public class PlayerController : MonoBehaviour
     private float _tackleDebuffTimer;
     public float _pickupTimer;
     private float _jukeTimer;
+    private float _footstepTimer;
 
     private readonly List<GameObject> attachedEnemies = new();
-    private Color normalColor = Color.white;
+    private Color normalColor = Color.white; // FIX: Restored missing variable
     private Vector3 originalScale;
     private Vector3 targetSquashScale;
+
+    private PhysicsMaterial2D noFrictionMat;
 
     void Awake()
     {
@@ -77,11 +81,12 @@ public class PlayerController : MonoBehaviour
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         rb.constraints = RigidbodyConstraints2D.FreezeRotation;
 
-        PhysicsMaterial2D noFrictionMat = new("ZeroFriction") { friction = 0f, bounciness = 0f };
+        noFrictionMat = new PhysicsMaterial2D("ZeroFriction") { friction = 0f, bounciness = 0f };
         col.sharedMaterial = noFrictionMat;
 
         originalScale = transform.localScale;
         targetSquashScale = originalScale;
+        if (spriteRenderer) normalColor = spriteRenderer.color;
 
         if (packageObject != null && packageObject.TryGetComponent<Collider2D>(out var packColl))
         {
@@ -104,19 +109,8 @@ public class PlayerController : MonoBehaviour
 
     void Update()
     {
-        if (GameManager.Instance == null)
-        {
-            _horizontalInput = 0;
-            return;
-        }
-
-        // DEBUGGING: If frozen, log why (Only once per second to avoid spam)
-        if (GameManager.Instance.isIntroSequence)
-        {
-            if (Time.frameCount % 60 == 0) Debug.Log("Player frozen: Intro Sequence Active");
-            _horizontalInput = 0;
-            return;
-        }
+        if (GameManager.Instance == null) { _horizontalInput = 0; return; }
+        if (GameManager.Instance.isIntroSequence) { _horizontalInput = 0; return; }
 
         if (isProne)
         {
@@ -128,6 +122,7 @@ public class PlayerController : MonoBehaviour
         HandleInput();
         UpdateTimers();
         CheckGrounded();
+        HandleFootsteps();
         HandleSquashAndStretch();
         UpdateAnimations();
     }
@@ -141,57 +136,70 @@ public class PlayerController : MonoBehaviour
         rb.linearVelocity = _velocity;
     }
 
-    // --- PHYSICS ENGINE ---
-
     private void CalculateMovement()
     {
-        // 1. Horizontal
-        float targetSpeed = _horizontalInput * stats.maxRunSpeed;
-        float penalty = (attachmentCount * 2.5f) + (_tackleDebuffTimer > 0 ? 8f : 0f);
-        if (Mathf.Abs(targetSpeed) > 0)
-            targetSpeed = Mathf.Sign(targetSpeed) * Mathf.Max(2f, Mathf.Abs(targetSpeed) - penalty);
+        float penaltyFactor = Mathf.Max(0.1f, 1.0f - (attachmentCount * 0.3f));
+        if (_tackleDebuffTimer > 0) penaltyFactor *= 0.5f;
 
-        float accelRate;
+        float targetSpeed = _horizontalInput * stats.maxRunSpeed * penaltyFactor;
 
-        // Apex Air Control Check
-        bool isApex = !IsGrounded && Mathf.Abs(_velocity.y) < stats.apexThreshold;
-
-        if (IsGrounded)
-            accelRate = (Mathf.Abs(targetSpeed) > 0.01f) ? (1 / stats.groundAccelerationTime) : (1 / stats.groundDecelerationTime);
+        if (Mathf.Abs(_horizontalInput) < 0.01f && IsGrounded)
+        {
+            _velocity.x = 0;
+            rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+        }
         else
-            accelRate = (Mathf.Abs(targetSpeed) > 0.01f) ? (1 / stats.groundAccelerationTime) * stats.airAccelMult : (1 / stats.groundDecelerationTime) * stats.airDecelMult;
+        {
+            float accelRate;
+            bool isApex = !IsGrounded && Mathf.Abs(_velocity.y) < stats.apexThreshold;
 
-        // Apply Apex Steering Bonus
-        if (isApex) accelRate *= stats.apexAirAccelMult;
+            if (IsGrounded)
+                accelRate = (Mathf.Abs(targetSpeed) > 0.01f) ? (1 / stats.groundAccelerationTime) : (1 / stats.groundDecelerationTime);
+            else
+                accelRate = (Mathf.Abs(targetSpeed) > 0.01f) ? (1 / stats.groundAccelerationTime) * stats.airAccelMult : (1 / stats.groundDecelerationTime) * stats.airDecelMult;
 
-        _velocity.x = Mathf.MoveTowards(_velocity.x, targetSpeed, accelRate * stats.maxRunSpeed * Time.fixedDeltaTime);
+            if (isApex) accelRate *= stats.apexAirAccelMult;
 
-        // 2. Vertical (Gravity Logic)
+            _velocity.x = Mathf.MoveTowards(_velocity.x, targetSpeed, accelRate * stats.maxRunSpeed * Time.fixedDeltaTime);
+        }
+
         float gravityMult = 1f;
-
         if (GameInput.Instance != null)
         {
-            if (_velocity.y > 0 && !GameInput.Instance.GetJumpHeld())
-                gravityMult = stats.jumpCutGravityMult;
-            else if (_velocity.y < 0)
-                gravityMult = stats.downwardGravityMult;
+            if (_velocity.y > 0 && !GameInput.Instance.GetJumpHeld()) gravityMult = stats.jumpCutGravityMult;
+            else if (_velocity.y < 0) gravityMult = stats.downwardGravityMult;
         }
 
-        // Apply Apex Hang Time
-        if (isApex)
-        {
-            gravityMult *= stats.apexGravityMult;
-        }
+        bool isApexHang = !IsGrounded && Mathf.Abs(_velocity.y) < stats.apexThreshold;
+        if (isApexHang) gravityMult *= stats.apexGravityMult;
 
         _velocity.y += _gravity * gravityMult * Time.fixedDeltaTime;
         _velocity.y = Mathf.Max(_velocity.y, -stats.maxFallSpeed);
 
-        // Flip Sprite
         if (_horizontalInput != 0 && !isSpinning)
         {
             float dir = Mathf.Sign(_horizontalInput);
-            float currentXScale = Mathf.Abs(transform.localScale.x);
-            transform.localScale = new Vector3(currentXScale * dir, transform.localScale.y, transform.localScale.z);
+            transform.localScale = new Vector3(Mathf.Abs(transform.localScale.x) * dir, transform.localScale.y, transform.localScale.z);
+        }
+    }
+
+    private void HandleFootsteps()
+    {
+        if (IsGrounded && Mathf.Abs(_horizontalInput) > 0.1f && !isProne)
+        {
+            _footstepTimer -= Time.deltaTime;
+            if (_footstepTimer <= 0)
+            {
+                float speedFactor = Mathf.Clamp(Mathf.Abs(_velocity.x) / stats.maxRunSpeed, 0.5f, 1.5f);
+                _footstepTimer = footstepInterval / speedFactor;
+
+                if (AudioManager.Instance) AudioManager.Instance.PlayRandomFootstep(false);
+                if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.footstepDustPrefab, groundCheck.position, 0.6f, 0.5f);
+            }
+        }
+        else
+        {
+            _footstepTimer = 0;
         }
     }
 
@@ -203,10 +211,7 @@ public class PlayerController : MonoBehaviour
 
         if (GameInput.Instance.GetJumpDown()) _jumpBufferTimer = stats.jumpBufferTime;
 
-        if (_jumpBufferTimer > 0 && _coyoteTimer > 0)
-        {
-            ExecuteJump();
-        }
+        if (_jumpBufferTimer > 0 && _coyoteTimer > 0) ExecuteJump();
 
         if (GameInput.Instance.GetSpinDown() && !isSpinning) StartCoroutine(PerformSpinMove());
         if (GameInput.Instance.GetStiffArmDown() && !isStiffArming) PerformStiffArm();
@@ -218,10 +223,11 @@ public class PlayerController : MonoBehaviour
         _jumpBufferTimer = 0;
         _coyoteTimer = 0;
 
+        float jumpPenaltyFactor = Mathf.Max(0f, 1.0f - (attachmentCount * 0.3f));
         float speedRatio = Mathf.Abs(_velocity.x) / stats.maxRunSpeed;
-        float finalJumpVelocity = _jumpVelocity + (stats.momentumJumpBonus * speedRatio) - (attachmentCount * 1.5f);
+        float baseJumpForce = _jumpVelocity + (stats.momentumJumpBonus * speedRatio);
 
-        _velocity.y = finalJumpVelocity;
+        _velocity.y = baseJumpForce * jumpPenaltyFactor;
 
         PlaySound(jumpSfx);
         if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.jumpDustPrefab, groundCheck.position);
@@ -267,7 +273,6 @@ public class PlayerController : MonoBehaviour
         if (_velocity.y <= 0) return;
         Vector2 pos = transform.position;
         Vector2 size = col.size;
-
         Vector2 origin = new Vector2(pos.x, pos.y + (size.y * 0.5f));
 
         RaycastHit2D hit = Physics2D.BoxCast(origin, new Vector2(size.x * 0.8f, 0.1f), 0, Vector2.up, 0.1f, stats.groundLayer);
@@ -298,8 +303,6 @@ public class PlayerController : MonoBehaviour
         float direction = Mathf.Sign(transform.localScale.x);
         transform.localScale = new Vector3(Mathf.Abs(targetSquashScale.x) * direction, targetSquashScale.y, 1f);
     }
-
-    // --- ABILITIES (Stiff Arm, Juke, Spin) ---
 
     private void PerformStiffArm()
     {
@@ -500,6 +503,8 @@ public class PlayerController : MonoBehaviour
         isProne = true;
         _proneTimer = duration;
         _velocity.x = 0;
+        rb.linearVelocity = Vector2.zero;
+
         transform.rotation = Quaternion.Euler(0, 0, 90);
         impulseSource.GenerateImpulse(1.5f);
         PlaySound(impactSfx);

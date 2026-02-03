@@ -11,24 +11,66 @@ public class InputDisplay : MonoBehaviour
     [Header("Settings")]
     public Color normalColor = new Color(1f, 1f, 1f, 0.5f);
     public Color pressedColor = new Color(1f, 0.8f, 0.2f, 1f);
+    public float flashDuration = 0.15f;
 
-    private Dictionary<string, Image> playerImages = new Dictionary<string, Image>();
-    private Dictionary<string, Image> craneImages = new Dictionary<string, Image>();
+    private class VisualKey
+    {
+        public Image uiImage;
+        public SpriteRenderer spriteRenderer;
+        public Transform transform;
+        public float flashTimer;
+
+        public VisualKey(Image img) { uiImage = img; transform = img.transform; }
+        public VisualKey(SpriteRenderer spr)
+        {
+            spriteRenderer = spr;
+            transform = spr.transform;
+
+            // FIX: Force Visibility in Game View for Screen Space Camera Canvas
+            spr.sortingOrder = 32000; // Force on top of all other layers
+            spr.sortingLayerName = "UI"; // Attempt to use UI layer
+
+            // Force Layer to UI to avoid camera culling
+            spr.gameObject.layer = LayerMask.NameToLayer("UI");
+
+            // Pull Z-position closer to camera relative to parent Canvas to prevent Z-fighting
+            Vector3 pos = transform.localPosition;
+            pos.z = -10f;
+            transform.localPosition = pos;
+        }
+
+        public void TriggerFlash(float duration)
+        {
+            flashTimer = duration;
+        }
+
+        public void UpdateVisuals(bool isContinuousPress, Color normal, Color pressed)
+        {
+            bool active = isContinuousPress || flashTimer > 0;
+            if (flashTimer > 0) flashTimer -= Time.deltaTime;
+
+            Color targetColor = active ? pressed : normal;
+            if (active) targetColor.a = 1f;
+
+            if (uiImage != null) uiImage.color = Color.Lerp(uiImage.color, targetColor, Time.deltaTime * 20f);
+            else if (spriteRenderer != null) spriteRenderer.color = Color.Lerp(spriteRenderer.color, targetColor, Time.deltaTime * 20f);
+        }
+    }
+
+    private Dictionary<string, VisualKey> playerKeys = new Dictionary<string, VisualKey>();
+    private Dictionary<string, VisualKey> craneKeys = new Dictionary<string, VisualKey>();
 
     void Start()
     {
-        // 1. Auto-find Panels based on your hierarchy image
         if (playerControlsParent == null) playerControlsParent = transform.Find("PlayerPanel")?.gameObject;
         if (craneControlsParent == null) craneControlsParent = transform.Find("CranePanel")?.gameObject;
 
-        // 2. Map Keys
-        if (playerControlsParent) MapKeys(playerControlsParent.transform, playerImages);
-        if (craneControlsParent) MapKeys(craneControlsParent.transform, craneImages);
+        if (playerControlsParent) MapKeys(playerControlsParent.transform, playerKeys, "Player");
+        if (craneControlsParent) MapKeys(craneControlsParent.transform, craneKeys, "Crane");
     }
 
     void Update()
     {
-        // Hide if game isn't running
         if (GameManager.Instance == null || GameManager.Instance.currentState != GameManager.GameState.Playing)
         {
             if (playerControlsParent) playerControlsParent.SetActive(false);
@@ -36,13 +78,11 @@ public class InputDisplay : MonoBehaviour
             return;
         }
 
-        // Determine Mode
         bool isCraneMode = CraneController.ActiveCrane != null && CraneController.ActiveCrane.isPlayerControlling;
 
         if (playerControlsParent) playerControlsParent.SetActive(!isCraneMode);
         if (craneControlsParent) craneControlsParent.SetActive(isCraneMode);
 
-        // Update Visuals
         if (isCraneMode) UpdateCraneVisuals();
         else UpdatePlayerVisuals();
     }
@@ -50,74 +90,100 @@ public class InputDisplay : MonoBehaviour
     private void UpdatePlayerVisuals()
     {
         if (GameInput.Instance == null) return;
-
         Vector2 move = GameInput.Instance.GetMovementInput();
 
-        SetKeyColor(playerImages, "W", move.y > 0.1f);
-        SetKeyColor(playerImages, "S", move.y < -0.1f);
-        SetKeyColor(playerImages, "A", move.x < -0.1f);
-        SetKeyColor(playerImages, "D", move.x > 0.1f);
+        UpdateKey(playerKeys, "W", move.y > 0.1f);
+        UpdateKey(playerKeys, "S", move.y < -0.1f);
+        UpdateKey(playerKeys, "A", move.x < -0.1f);
+        UpdateKey(playerKeys, "D", move.x > 0.1f);
+        UpdateKey(playerKeys, "SPACE", GameInput.Instance.GetJumpHeld());
 
-        SetKeyColor(playerImages, "Space", GameInput.Instance.GetJumpHeld());
-        SetKeyColor(playerImages, "E", GameInput.Instance.GetStiffArmDown());
-        SetKeyColor(playerImages, "Q", GameInput.Instance.GetSpinDown());
-        SetKeyColor(playerImages, "Shift", GameInput.Instance.GetJukeDown()); // Mapped to Key_Shift
-        SetKeyColor(playerImages, "F", GameInput.Instance.GetInteractDown());
-        SetKeyColor(playerImages, "ESC", GameInput.Instance.GetPauseDown());
+        if (GameInput.Instance.GetStiffArmDown()) FlashKey(playerKeys, "E");
+        if (GameInput.Instance.GetSpinDown()) FlashKey(playerKeys, "Q");
+        if (GameInput.Instance.GetJukeDown()) FlashKey(playerKeys, "SHIFT");
+        if (GameInput.Instance.GetInteractDown()) FlashKey(playerKeys, "F");
+        if (GameInput.Instance.GetPauseDown()) FlashKey(playerKeys, "ESC");
+
+        foreach (var key in playerKeys.Values) key.UpdateVisuals(false, normalColor, pressedColor);
     }
 
     private void UpdateCraneVisuals()
     {
         if (GameInput.Instance == null) return;
-
         Vector2 move = GameInput.Instance.GetMovementInput();
 
-        SetKeyColor(craneImages, "W", move.y > 0.1f);
-        SetKeyColor(craneImages, "S", move.y < -0.1f);
-        SetKeyColor(craneImages, "A", move.x < -0.1f);
-        SetKeyColor(craneImages, "D", move.x > 0.1f);
+        UpdateKey(craneKeys, "W", move.y > 0.1f);
+        UpdateKey(craneKeys, "S", move.y < -0.1f);
+        UpdateKey(craneKeys, "A", move.x < -0.1f);
+        UpdateKey(craneKeys, "D", move.x > 0.1f);
+        UpdateKey(craneKeys, "SPACE", GameInput.Instance.GetJumpHeld());
 
-        SetKeyColor(craneImages, "Space", GameInput.Instance.GetJumpHeld());
-        SetKeyColor(craneImages, "Tab", GameInput.Instance.GetCraneModeSwitch());
-        SetKeyColor(craneImages, "F", GameInput.Instance.GetInteractDown()); // Exit Crane
-        SetKeyColor(craneImages, "ESC", GameInput.Instance.GetPauseDown());
+        if (GameInput.Instance.GetCraneModeSwitch()) FlashKey(craneKeys, "TAB");
+        if (GameInput.Instance.GetInteractDown()) FlashKey(craneKeys, "F");
+        if (GameInput.Instance.GetPauseDown()) FlashKey(craneKeys, "ESC");
+
+        foreach (var key in craneKeys.Values) key.UpdateVisuals(false, normalColor, pressedColor);
     }
 
-    private void SetKeyColor(Dictionary<string, Image> map, string keyName, bool isPressed)
+    private void UpdateKey(Dictionary<string, VisualKey> map, string keyName, bool isHeld)
     {
-        if (map.TryGetValue(keyName, out Image img))
+        if (map.TryGetValue(keyName, out VisualKey key))
         {
-            img.color = Color.Lerp(img.color, isPressed ? pressedColor : normalColor, Time.deltaTime * 20f);
-
-            float targetScale = isPressed ? 1.2f : 1.0f;
-            img.transform.localScale = Vector3.Lerp(img.transform.localScale, Vector3.one * targetScale, Time.deltaTime * 20f);
+            key.UpdateVisuals(isHeld, normalColor, pressedColor);
         }
     }
 
-    private void MapKeys(Transform parent, Dictionary<string, Image> map)
+    private void FlashKey(Dictionary<string, VisualKey> map, string keyName)
     {
-        foreach (Transform child in parent)
+        if (map.TryGetValue(keyName, out VisualKey key))
         {
+            key.TriggerFlash(flashDuration);
+        }
+    }
+
+    private void MapKeys(Transform parent, Dictionary<string, VisualKey> map, string context)
+    {
+        Transform[] allChildren = parent.GetComponentsInChildren<Transform>(true);
+
+        foreach (Transform child in allChildren)
+        {
+            if (child == parent || child == transform) continue;
+
+            VisualKey vKey = null;
             Image img = child.GetComponent<Image>();
-            if (img == null) continue;
 
-            string name = child.name;
+            if (img != null) vKey = new VisualKey(img);
+            else
+            {
+                SpriteRenderer spr = child.GetComponent<SpriteRenderer>();
+                if (spr != null) vKey = new VisualKey(spr);
+            }
 
-            // Strict mapping based on your screenshot names
-            if (name == "Key_W") map["W"] = img;
-            else if (name == "Key_A") map["A"] = img;
-            else if (name == "Key_S") map["S"] = img;
-            else if (name == "Key_D") map["D"] = img;
-            else if (name == "Key_Space") map["Space"] = img;
-            else if (name == "Key_E") map["E"] = img;
-            else if (name == "Key_Q") map["Q"] = img;
-            else if (name == "Key_F") map["F"] = img;
-            else if (name == "Key_Shift") map["Shift"] = img;
-            else if (name == "Key_Tab") map["Tab"] = img;
-            else if (name == "Key_ESC") map["ESC"] = img;
+            if (vKey == null) continue;
 
-            // Set initial state
-            if (map.ContainsValue(img)) img.color = normalColor;
+            string name = child.name.ToUpper();
+
+            if (name.Contains("SHIFT")) Map(map, "SHIFT", vKey);
+            else if (name.Contains("SPACE")) Map(map, "SPACE", vKey);
+            else if (name.Contains("TAB")) Map(map, "TAB", vKey);
+            else if (name.Contains("ESC") || name.Contains("ESCAPE")) Map(map, "ESC", vKey);
+
+            else if (name.Contains("Q")) Map(map, "Q", vKey);
+            else if (name.Contains("W")) Map(map, "W", vKey);
+            else if (name.Contains("F")) Map(map, "F", vKey);
+            else if (name.Contains("A")) Map(map, "A", vKey);
+            else if (name.Contains("S")) Map(map, "S", vKey);
+            else if (name.Contains("D")) Map(map, "D", vKey);
+            else if (name.Contains("E")) Map(map, "E", vKey);
+        }
+    }
+
+    private void Map(Dictionary<string, VisualKey> map, string key, VisualKey vKey)
+    {
+        if (!map.ContainsKey(key))
+        {
+            map[key] = vKey;
+            vKey.UpdateVisuals(false, normalColor, pressedColor);
         }
     }
 }

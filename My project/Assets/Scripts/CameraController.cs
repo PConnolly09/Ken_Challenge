@@ -17,21 +17,24 @@ public class CameraController : MonoBehaviour
     [Header("Directional Framing")]
     public float forwardBias = -0.2f;
     public float backwardBias = 0.2f;
+
+    [Header("Dynamic Panning")]
     public float switchThreshold = 0.1f;
+    public float minBiasSpeed = 0.4f;
+    public float maxBiasSpeed = 2.0f;
+    public float highSpeedThreshold = 6.0f;
+
     public float turnDelay = 0.5f;
-    public float biasShiftSpeed = .75f;
 
     private float currentXBias;
+    private float currentBiasSpeed; // Internal smoother
     private bool isFacingRight = true;
     private float turnTimer = 0f;
     private float targetSize;
 
-    // FLAGS
     private bool isCraneView = false;
-    private bool isFumbleMode = false;
 
     [Header("Vertical")]
-    public float verticalDamping = 0.0f;
     public float verticalDeadZone = 0.3f;
     public float screenYBias = 0.2f;
     public float horizontalDamping = 0.5f;
@@ -65,16 +68,10 @@ public class CameraController : MonoBehaviour
             virtualCamera.Lens.OrthographicSize = Mathf.Lerp(virtualCamera.Lens.OrthographicSize, targetSize, Time.deltaTime * 2f);
         }
 
-        if (!isCraneView && !isFumbleMode)
+        if (!isCraneView)
         {
             HandleDirectionalFraming();
             HandleLookDown();
-        }
-        else if (isFumbleMode)
-        {
-            // Center the camera during fumble for stability
-            currentXBias = Mathf.MoveTowards(currentXBias, 0f, biasShiftSpeed * Time.deltaTime);
-            UpdateComposer();
         }
     }
 
@@ -83,8 +80,10 @@ public class CameraController : MonoBehaviour
         if (playerRb == null || positionComposer == null) return;
 
         float velocityX = playerRb.linearVelocity.x;
+        float absVel = Mathf.Abs(velocityX);
         bool tryingToSwitch = false;
 
+        // 1. Detect Direction
         if (isFacingRight && velocityX < -switchThreshold)
         {
             tryingToSwitch = true;
@@ -100,8 +99,12 @@ public class CameraController : MonoBehaviour
 
         if (!tryingToSwitch) turnTimer = 0f;
 
+        // 2. Smooth Dynamic Speed
+        float targetSpeed = (absVel > highSpeedThreshold) ? maxBiasSpeed : minBiasSpeed;
+        currentBiasSpeed = Mathf.Lerp(currentBiasSpeed, targetSpeed, Time.deltaTime * 2f); // Smooth accel
+
         float targetX = isFacingRight ? forwardBias : backwardBias;
-        currentXBias = Mathf.MoveTowards(currentXBias, targetX, biasShiftSpeed * Time.deltaTime);
+        currentXBias = Mathf.MoveTowards(currentXBias, targetX, currentBiasSpeed * Time.deltaTime);
 
         UpdateComposer();
     }
@@ -111,7 +114,6 @@ public class CameraController : MonoBehaviour
         if (playerRb == null || positionComposer == null) return;
 
         float targetOffset = 0f;
-        // GameInput support implied or fallback to axis
         if (GameInput.Instance != null)
         {
             if (GameInput.Instance.GetMovementInput().y < -0.5f) targetOffset = lookDownOffset;
@@ -150,23 +152,6 @@ public class CameraController : MonoBehaviour
         }
     }
 
-    // FIX: New Method for Fumble Mode
-    public void SetFumbleMode(bool active)
-    {
-        isFumbleMode = active;
-        if (active)
-        {
-            // Zoom out slightly and center
-            targetSize = orthographicSize * 1.2f;
-            // Bias will be zeroed in Update
-        }
-        else
-        {
-            targetSize = orthographicSize;
-            currentXBias = isFacingRight ? forwardBias : backwardBias;
-        }
-    }
-
     public void ApplyCameraSettings()
     {
         if (positionComposer == null) return;
@@ -177,7 +162,7 @@ public class CameraController : MonoBehaviour
         comp.HardLimits.Size = new Vector2(0.8f, 0.8f);
 
         positionComposer.Composition = comp;
-        positionComposer.Damping = new Vector3(horizontalDamping, verticalDamping, 0f);
+        positionComposer.Damping = new Vector3(horizontalDamping, 0f, 0f); // Removed vertical damp
     }
 
     public void SetPlayerGrounded(bool grounded) { }

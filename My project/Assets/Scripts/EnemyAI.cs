@@ -11,10 +11,14 @@ public abstract class EnemyAI : MonoBehaviour
     public LayerMask obstacleLayer;
     public GameObject bloodSplatterPrefab;
 
-    [Header("Navigation & Jumps")]
+    [Header("Navigation")]
     public float navigationJumpForce = 8f;
     public float jumpCooldown = 1.5f;
     private float lastJumpTime;
+
+    private float flipCooldownTimer = 0f;
+    private float minTimeBetweenFlips = 0.5f;
+    private float lastPatrolSwitchTime = 0f;
 
     [Header("Patrol Settings")]
     public Transform[] patrolPoints;
@@ -22,13 +26,11 @@ public abstract class EnemyAI : MonoBehaviour
     protected float patrolWaitTimer = 0f;
     public float waitAtWaypointTime = 1f;
 
-    [Header("Pathfinding & Stuck Detection")]
+    [Header("Pathfinding")]
     public float giveUpDuration = 2.0f;
     private float targetIgnoreTimer;
-
-    // FIX: Reduced stuck threshold for snappier response
     private float stuckCheckTimer = 0f;
-    private float stuckThreshold = 0.15f;
+    private float stuckThreshold = 0.2f;
     private float lastXPosition;
 
     [Header("Package Logic")]
@@ -56,7 +58,10 @@ public abstract class EnemyAI : MonoBehaviour
 
         if (selfCollider)
         {
-            selfCollider.sharedMaterial = new PhysicsMaterial2D("EnemyZeroFriction") { friction = 0f, bounciness = 0f };
+            PhysicsMaterial2D noFriction = new PhysicsMaterial2D("EnemyZeroFriction");
+            noFriction.friction = 0f;
+            noFriction.bounciness = 0f;
+            selfCollider.sharedMaterial = noFriction;
         }
 
         startPos = transform.position;
@@ -74,6 +79,7 @@ public abstract class EnemyAI : MonoBehaviour
 
     protected virtual void FixedUpdate()
     {
+        if (flipCooldownTimer > 0) flipCooldownTimer -= Time.fixedDeltaTime;
         if (isKnockedBack || !enabled) return;
 
         MonitorStuckState();
@@ -99,7 +105,11 @@ public abstract class EnemyAI : MonoBehaviour
         {
             if (CheckWallAhead())
             {
-                if (!AttemptNavigationJump()) ForceGiveUp();
+                if (!AttemptNavigationJump())
+                {
+                    rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+                    ForceGiveUp();
+                }
             }
             else
             {
@@ -114,22 +124,23 @@ public abstract class EnemyAI : MonoBehaviour
 
     private void MonitorStuckState()
     {
-        // Only monitor if we intend to move
         if (Mathf.Abs(rb.linearVelocity.x) > 0.1f || isChasing || carriesPackage)
         {
             float distMoved = Mathf.Abs(transform.position.x - lastXPosition);
 
-            // If we are physically stationary
             if (distMoved < 0.02f)
             {
                 stuckCheckTimer += Time.fixedDeltaTime;
                 if (stuckCheckTimer > stuckThreshold)
                 {
-                    // If we can't jump, flip immediately
-                    if (!AttemptNavigationJump())
+                    // Stuck logic
+                    if (!isChasing && !carriesPackage)
                     {
-                        Flip();
-                        if (isChasing) ForceGiveUp();
+                        SwitchPatrolPoint();
+                    }
+                    else
+                    {
+                        if (!AttemptNavigationJump()) { Flip(); if (isChasing) ForceGiveUp(); }
                     }
                     stuckCheckTimer = 0;
                 }
@@ -144,10 +155,17 @@ public abstract class EnemyAI : MonoBehaviour
 
     protected bool CheckWallAhead()
     {
-        Vector2 origin = (Vector2)transform.position + new Vector2(0, 0.5f);
+        if (flipCooldownTimer > 0) return false;
+
+        Vector2 pos = transform.position;
         Vector2 dir = movingRight ? Vector2.right : Vector2.left;
-        RaycastHit2D hit = Physics2D.Raycast(origin, dir, 1.0f, obstacleLayer);
-        return hit.collider != null;
+        float dist = 0.8f;
+
+        bool hitTop = Physics2D.Raycast(pos + Vector2.up * 0.8f, dir, dist, obstacleLayer);
+        bool hitMid = Physics2D.Raycast(pos + Vector2.up * 0.4f, dir, dist, obstacleLayer);
+        bool hitBot = Physics2D.Raycast(pos + Vector2.up * 0.1f, dir, dist, obstacleLayer);
+
+        return hitTop || hitMid || hitBot;
     }
 
     protected bool CheckHazardAhead()
@@ -164,7 +182,6 @@ public abstract class EnemyAI : MonoBehaviour
         {
             return true; // Cliff
         }
-
         return false;
     }
 
@@ -222,19 +239,36 @@ public abstract class EnemyAI : MonoBehaviour
         currentTarget = null;
     }
 
+    protected void SwitchPatrolPoint()
+    {
+        if (patrolPoints != null && patrolPoints.Length > 0)
+        {
+            if (Time.time - lastPatrolSwitchTime > 1.0f)
+            {
+                currentPatrolIndex = (currentPatrolIndex + 1) % patrolPoints.Length;
+                patrolWaitTimer = 0;
+                lastPatrolSwitchTime = Time.time;
+                Flip();
+            }
+            else
+            {
+                // If stuck again immediately, THEN jump
+                AttemptNavigationJump();
+            }
+        }
+    }
+
     protected virtual void Patrol()
     {
         if (patrolPoints == null || patrolPoints.Length == 0) return;
 
-        if (CheckHazardAhead())
-        {
-            Flip();
-            return;
-        }
+        if (CheckHazardAhead()) { SwitchPatrolPoint(); return; }
 
+        // FIX: Prioritize Switching over Jumping for Patrol
         if (CheckWallAhead())
         {
-            if (!AttemptNavigationJump()) Flip();
+            rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+            SwitchPatrolPoint();
             return;
         }
 
@@ -247,8 +281,7 @@ public abstract class EnemyAI : MonoBehaviour
             patrolWaitTimer += Time.fixedDeltaTime;
             if (patrolWaitTimer > waitAtWaypointTime)
             {
-                currentPatrolIndex = (currentPatrolIndex + 1) % patrolPoints.Length;
-                patrolWaitTimer = 0;
+                SwitchPatrolPoint();
             }
         }
         else
@@ -262,16 +295,15 @@ public abstract class EnemyAI : MonoBehaviour
     {
         if (playerTransform == null) return;
 
-        if (CheckHazardAhead())
-        {
-            rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
-            Flip();
-            return;
-        }
+        if (CheckHazardAhead()) { Flip(); return; }
 
         if (CheckWallAhead())
         {
-            if (!AttemptNavigationJump()) Flip();
+            if (!AttemptNavigationJump())
+            {
+                rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+                Flip();
+            }
         }
 
         float dir = (transform.position.x > playerTransform.position.x) ? 1 : -1;
@@ -328,10 +360,14 @@ public abstract class EnemyAI : MonoBehaviour
 
     protected void Flip()
     {
+        if (flipCooldownTimer > 0) return;
+
         movingRight = !movingRight;
         Vector3 s = transform.localScale;
         s.x *= -1;
         transform.localScale = s;
+
+        flipCooldownTimer = minTimeBetweenFlips;
     }
 
     protected virtual void OnCollisionEnter2D(Collision2D collision)
@@ -360,11 +396,7 @@ public abstract class EnemyAI : MonoBehaviour
         Gizmos.color = Color.red;
         Vector3 origin = transform.position + new Vector3(0, 0.5f, 0);
         Vector3 dir = movingRight ? Vector3.right : Vector3.left;
-        Gizmos.DrawRay(origin, dir * 1.0f);
-
-        Gizmos.color = Color.blue;
-        Vector3 hazardOrigin = transform.position + (movingRight ? Vector3.right : Vector3.left) * 0.8f;
-        Gizmos.DrawRay(hazardOrigin, Vector3.down * 1.5f);
+        Gizmos.DrawRay(origin, dir * 0.8f);
 
         if (patrolPoints != null)
         {

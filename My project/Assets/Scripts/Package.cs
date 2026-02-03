@@ -7,13 +7,18 @@ public class Package : MonoBehaviour
     private Rigidbody2D rb;
     private Collider2D coll;
     private Transform targetAnchor;
-    private Vector3 startPosition;
+    private SpriteRenderer spriteRenderer;
 
     [Header("Status")]
     public bool isHeld = false;
     [Tooltip("Check this if the player starts the level holding this.")]
     public bool startHeld = false;
     public MonoBehaviour currentHolder;
+
+    [Header("Visuals")]
+    public Color normalColor = Color.white;
+    public Color flashColor = new Color(1f, 0.8f, 0.5f, 1f); // Golden glow
+    public float flashSpeed = 3f;
 
     [Header("Physics Settings")]
     public float dropGravity = 3f;
@@ -27,18 +32,19 @@ public class Package : MonoBehaviour
     {
         rb = GetComponent<Rigidbody2D>();
         coll = GetComponent<CircleCollider2D>();
+        spriteRenderer = GetComponent<SpriteRenderer>();
         gameObject.tag = "Package";
         rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
 
         settlingMaterial = new PhysicsMaterial2D("DeadBall") { bounciness = 0f, friction = 0.8f };
 
         if (fumbleMaterial != null) coll.sharedMaterial = fumbleMaterial;
+
+        if (spriteRenderer) normalColor = spriteRenderer.color;
     }
 
     void Start()
     {
-        startPosition = transform.position;
-
         if (startHeld)
         {
             GameObject player = GameObject.FindGameObjectWithTag("Player");
@@ -66,16 +72,27 @@ public class Package : MonoBehaviour
 
     void Update()
     {
-        if (isHeld && targetAnchor == null)
+        if (isHeld)
         {
-            SetHeld(false, null, null);
-            return;
-        }
+            if (targetAnchor == null)
+            {
+                SetHeld(false, null, null);
+                return;
+            }
+            transform.position = targetAnchor.position;
+            transform.rotation = targetAnchor.rotation;
 
-        if (isHeld && targetAnchor != null)
+            // Reset Color
+            if (spriteRenderer) spriteRenderer.color = normalColor;
+        }
+        else
         {
-            // FIX: UNT0022 - Optimize dual assignment
-            transform.SetPositionAndRotation(targetAnchor.position, targetAnchor.rotation);
+            // Flash Effect
+            if (spriteRenderer)
+            {
+                float t = Mathf.PingPong(Time.time * flashSpeed, 1f);
+                spriteRenderer.color = Color.Lerp(normalColor, flashColor, t);
+            }
         }
     }
 
@@ -96,14 +113,11 @@ public class Package : MonoBehaviour
     public void Respawn()
     {
         SetHeld(false, null, null);
+        // Assuming GameManager handles respawn position or we reset to a safe spot. 
+        // For now, this just clears physics.
         rb.linearVelocity = Vector2.zero;
-        rb.angularVelocity = 0f;
-        // FIX: UNT0022 - Optimize dual assignment
-        transform.SetPositionAndRotation(startPosition, Quaternion.identity);
         coll.sharedMaterial = settlingMaterial;
-
-        if (GameManager.Instance)
-            GameManager.Instance.RecoverFumble();
+        if (GameManager.Instance) GameManager.Instance.RecoverFumble();
     }
 
     public void SetHeld(bool held, Transform anchor, MonoBehaviour holder)

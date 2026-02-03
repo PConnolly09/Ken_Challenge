@@ -55,18 +55,24 @@ public class MainMenuController : MonoBehaviour
 
     // --- SETTINGS LOGIC ---
 
-    // Hook this up to your Master Volume Slider (Min: 0, Max: 1)
     public void SetMasterVolume(float value)
     {
         AudioListener.volume = value;
     }
 
-    // Hook this up to your Music Volume Slider (Min: 0, Max: 1)
     public void SetMusicVolume(float value)
     {
         if (AudioManager.Instance)
         {
             AudioManager.Instance.SetMusicVolume(value);
+        }
+    }
+
+    public void SetSFXVolume(float value)
+    {
+        if (AudioManager.Instance)
+        {
+            AudioManager.Instance.SetSFXVolume(value);
         }
     }
 
@@ -95,7 +101,6 @@ public class MainMenuController : MonoBehaviour
             string downStr = $"{e.down}{downSuffix} down";
 
             // Fixed width formatting using dots
-            // Note: For perfect alignment, use a Monospaced font in TextMeshPro
             string rank = $"#{i + 1}";
             string line = $"{rank}: {e.name} ................. {timeStr} / {downStr}";
 
