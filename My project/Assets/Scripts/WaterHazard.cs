@@ -6,11 +6,10 @@ public class WaterHazard : MonoBehaviour
     [Header("Visuals")]
     public GameObject splashEffect;
 
-    private bool triggerLock = false; // Prevent double-dunking in the same frame
+    private bool triggerLock = false;
 
     private void OnTriggerEnter2D(Collider2D other)
     {
-        // 1. Visual Feedback
         if (splashEffect != null)
         {
             Vector3 spawnPos = other.transform.position;
@@ -18,7 +17,6 @@ public class WaterHazard : MonoBehaviour
             Instantiate(splashEffect, spawnPos, Quaternion.identity);
         }
 
-        // 2. Logic
         if (other.CompareTag("Player"))
         {
             TriggerPenalty("DROWNED");
@@ -33,13 +31,20 @@ public class WaterHazard : MonoBehaviour
             {
                 if (pkg.isHeld)
                 {
-                    // If held, rely on player collision or trigger specifically here
                     TriggerPenalty("DROWNED");
                 }
                 else
                 {
-                    Debug.Log("Loose ball hit water - Respawning...");
-                    pkg.Respawn();
+                    // FIX: If we are in Fumble Mode, hitting water is a TURNOVER, not a safe respawn
+                    if (GameManager.Instance && GameManager.Instance.currentState == GameManager.GameState.Fumble)
+                    {
+                        TriggerPenalty("FUMBLE LOST");
+                    }
+                    else
+                    {
+                        Debug.Log("Loose ball hit water - Respawning...");
+                        pkg.Respawn();
+                    }
                 }
             }
         }
@@ -51,9 +56,9 @@ public class WaterHazard : MonoBehaviour
 
     private void TriggerPenalty(string reason)
     {
-        if (triggerLock) return; // Already dying
+        if (triggerLock) return;
 
-        if (GameManager.Instance && GameManager.Instance.currentState == GameManager.GameState.Playing)
+        if (GameManager.Instance)
         {
             triggerLock = true;
             Debug.Log($"WaterHazard: Triggering Down. Reason: {reason}");

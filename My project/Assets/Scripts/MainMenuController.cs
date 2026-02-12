@@ -16,7 +16,6 @@ public class MainMenuController : MonoBehaviour
 
     void OnEnable()
     {
-        // Don't override the screen if the game is actually running
         if (GameManager.Instance != null && GameManager.Instance.currentState == GameManager.GameState.Playing)
         {
             gameObject.SetActive(false);
@@ -24,6 +23,20 @@ public class MainMenuController : MonoBehaviour
         }
 
         ShowRoot();
+
+        if (LeaderboardManager.Instance != null)
+        {
+            LeaderboardManager.Instance.OnScoresLoaded += UpdateLeaderboardText;
+            LeaderboardManager.Instance.RefreshScores();
+        }
+    }
+
+    void OnDisable()
+    {
+        if (LeaderboardManager.Instance != null)
+        {
+            LeaderboardManager.Instance.OnScoresLoaded -= UpdateLeaderboardText;
+        }
     }
 
     public void ShowRoot()
@@ -38,7 +51,10 @@ public class MainMenuController : MonoBehaviour
     {
         if (rootMenu) rootMenu.SetActive(false);
         if (leaderboardPanel) leaderboardPanel.SetActive(true);
-        UpdateLeaderboardText();
+
+        if (leaderboardText) leaderboardText.text = "Loading Scores...";
+
+        if (LeaderboardManager.Instance) LeaderboardManager.Instance.RefreshScores();
     }
 
     public void ShowSettings()
@@ -53,28 +69,9 @@ public class MainMenuController : MonoBehaviour
         if (creditsPanel) creditsPanel.SetActive(true);
     }
 
-    // --- SETTINGS LOGIC ---
-
-    public void SetMasterVolume(float value)
-    {
-        AudioListener.volume = value;
-    }
-
-    public void SetMusicVolume(float value)
-    {
-        if (AudioManager.Instance)
-        {
-            AudioManager.Instance.SetMusicVolume(value);
-        }
-    }
-
-    public void SetSFXVolume(float value)
-    {
-        if (AudioManager.Instance)
-        {
-            AudioManager.Instance.SetSFXVolume(value);
-        }
-    }
+    public void SetMasterVolume(float value) { AudioListener.volume = value; }
+    public void SetMusicVolume(float value) { if (AudioManager.Instance) AudioManager.Instance.SetMusicVolume(value); }
+    public void SetSFXVolume(float value) { if (AudioManager.Instance) AudioManager.Instance.SetSFXVolume(value); }
 
     // --- LEADERBOARD FORMATTING ---
 
@@ -83,24 +80,25 @@ public class MainMenuController : MonoBehaviour
         if (LeaderboardManager.Instance == null || leaderboardText == null) return;
 
         StringBuilder sb = new StringBuilder();
-        sb.AppendLine("<b>TOP RUSHERS</b>\n");
+        sb.AppendLine("<b>TOP 50 RUSHERS (GLOBAL)</b>\n");
 
         var entries = LeaderboardManager.Instance.data.entries;
+        int count = Mathf.Min(entries.Count, 50);
 
-        for (int i = 0; i < entries.Count; i++)
+        for (int i = 0; i < count; i++)
         {
             var e = entries[i];
 
-            // Format Time (e.g., 65.5s -> "01:05")
+            // FIX: High Precision Formatting (00:00.000)
             int minutes = Mathf.FloorToInt(e.time / 60F);
-            int seconds = Mathf.FloorToInt(e.time - minutes * 60);
-            string timeStr = string.Format("{0:0}:{1:00}", minutes, seconds);
+            int seconds = Mathf.FloorToInt(e.time % 60F);
+            int milliseconds = Mathf.FloorToInt((e.time * 1000F) % 1000F);
 
-            // Format Down (1 -> "1st", 2 -> "2nd", etc)
+            string timeStr = string.Format("{0:00}:{1:00}.{2:000}", minutes, seconds, milliseconds);
+
             string downSuffix = GetOrdinalSuffix(e.down);
             string downStr = $"{e.down}{downSuffix} down";
 
-            // Fixed width formatting using dots
             string rank = $"#{i + 1}";
             string line = $"{rank}: {e.name} ................. {timeStr} / {downStr}";
 
@@ -114,8 +112,7 @@ public class MainMenuController : MonoBehaviour
 
     private string GetOrdinalSuffix(int num)
     {
-        if (num <= 0) return "th"; // 0th down fallback
-
+        if (num <= 0) return "th";
         switch (num % 100)
         {
             case 11:
@@ -123,7 +120,6 @@ public class MainMenuController : MonoBehaviour
             case 13:
                 return "th";
         }
-
         switch (num % 10)
         {
             case 1: return "st";

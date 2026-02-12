@@ -2,7 +2,6 @@ using UnityEngine;
 
 public class CraneController : MonoBehaviour
 {
-    // Global reference for UI to check status
     public static CraneController ActiveCrane { get; private set; }
 
     public enum ControlMode { MoveStructure, OperateCart }
@@ -35,7 +34,6 @@ public class CraneController : MonoBehaviour
     private GameObject currentObject;
     private Rigidbody2D currentObjectRb;
 
-    // Internal state
     private float gantryStartX;
     private float grabberInitialLocalX;
     private PlayerController playerRef;
@@ -44,7 +42,18 @@ public class CraneController : MonoBehaviour
 
     void Awake()
     {
-        if (gantry) gantryStartX = gantry.position.x;
+        if (gantry)
+        {
+            gantryStartX = gantry.position.x;
+            // FIX: Ensure Gantry is Walkable
+            if (gantry.GetComponent<Collider2D>() == null)
+            {
+                BoxCollider2D box = gantry.gameObject.AddComponent<BoxCollider2D>();
+                box.size = new Vector2(10f, 0.5f); // Approx size
+                // Optionally set layer to "Ground" if you have it:
+                // gantry.gameObject.layer = LayerMask.NameToLayer("Ground");
+            }
+        }
         if (grabber) grabberInitialLocalX = grabber.localPosition.x;
 
         SetupKinematic(gantry);
@@ -126,7 +135,6 @@ public class CraneController : MonoBehaviour
 
         if (hit && hit.CompareTag("Grabbable"))
         {
-            Debug.Log("CRANE: Picked up " + hit.name);
             currentObject = hit.gameObject;
             currentObjectRb = currentObject.GetComponent<Rigidbody2D>();
 
@@ -147,8 +155,6 @@ public class CraneController : MonoBehaviour
     {
         if (currentObject != null)
         {
-            Debug.Log("CRANE: Dropped " + currentObject.name);
-
             if (currentObject.TryGetComponent<HeavyObject>(out var heavy)) heavy.OnRelease();
 
             currentObject.transform.SetParent(null);
@@ -178,7 +184,7 @@ public class CraneController : MonoBehaviour
     public void EnterControl(PlayerController player)
     {
         isPlayerControlling = true;
-        ActiveCrane = this; // Register as global active crane for UI
+        ActiveCrane = this;
         playerRef = player;
         player.enabled = false;
 
@@ -194,7 +200,7 @@ public class CraneController : MonoBehaviour
     public void ExitControl()
     {
         isPlayerControlling = false;
-        if (ActiveCrane == this) ActiveCrane = null; // Deregister
+        if (ActiveCrane == this) ActiveCrane = null;
 
         if (playerRef)
         {

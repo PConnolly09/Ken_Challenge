@@ -17,6 +17,7 @@ public class GameManager : MonoBehaviour
     public GameState currentState;
 
     private bool debugMode = true;
+    private bool hasSubmittedScore = false;
 
     [Header("UI Panels (Auto-Assigned)")]
     public GameObject mainMenuPanel;
@@ -72,6 +73,12 @@ public class GameManager : MonoBehaviour
         Instance = this;
         DontDestroyOnLoad(gameObject);
 
+        Application.targetFrameRate = 60;
+        QualitySettings.vSyncCount = 0;
+
+        Physics2D.velocityIterations = 16;
+        Physics2D.positionIterations = 16;
+
         Time.timeScale = 1f;
 
         if (AutoStartNextLoad) currentState = GameState.Playing;
@@ -100,7 +107,6 @@ public class GameManager : MonoBehaviour
     {
         yield return null;
 
-        // 1. Find Player
         if (playerTransform == null)
         {
             GameObject p = GameObject.FindGameObjectWithTag("Player");
@@ -114,11 +120,10 @@ public class GameManager : MonoBehaviour
 
         if (_cachedPlayerController) _cachedPlayerController.enabled = true;
         isIntroSequence = false;
+        hasSubmittedScore = false;
 
-        // 2. Find UI
         LocateUIReferences();
 
-        // 3. Apply State
         if (AutoStartNextLoad)
         {
             AutoStartNextLoad = false;
@@ -130,7 +135,6 @@ public class GameManager : MonoBehaviour
             SetState(GameState.MainMenu);
         }
 
-        // 4. Notification Check
         if (!string.IsNullOrEmpty(pendingNotification))
         {
             if (downNotificationPanel && downNotificationText)
@@ -148,6 +152,27 @@ public class GameManager : MonoBehaviour
     {
         yield return new WaitForSeconds(2.5f);
         if (downNotificationPanel) downNotificationPanel.SetActive(false);
+    }
+
+    // --- HELPER FOR BUG REPORTER ---
+    public string GetDebugInfo()
+    {
+        string pPos = playerTransform ? playerTransform.position.ToString() : "null";
+        string pVel = _cachedPlayerController ? _cachedPlayerController.GetComponent<Rigidbody2D>().linearVelocity.ToString() : "null";
+        string pkgHeld = "unknown";
+
+        // Find package status safely
+        if (currentPackageTransform) pkgHeld = "Fumbled (Floor)";
+        else if (_cachedPlayerController && _cachedPlayerController.hasPackage) pkgHeld = "Player";
+        else pkgHeld = "Unknown/Enemy";
+
+        return $"State: {currentState}\n" +
+               $"Down: {CurrentDown}/{maxDowns}\n" +
+               $"Time: {Time.time - startTime:F2}s\n" +
+               $"Player Pos: {pPos}\n" +
+               $"Player Vel: {pVel}\n" +
+               $"Package: {pkgHeld}\n" +
+               $"Scene: {SceneManager.GetActiveScene().name}";
     }
 
     private void LocateUIReferences()
@@ -240,6 +265,9 @@ public class GameManager : MonoBehaviour
             BindButton(pausePanel, "Resume", TogglePause);
             BindButton(pausePanel, "Menu", ReturnToMainMenu);
             BindButton(pausePanel, "Quit", QuitToDesktop);
+            // Ensure Try Again does full restart
+            BindButton(pausePanel, "Retry", FullRestart);
+            BindButton(pausePanel, "Restart", FullRestart);
         }
     }
 
@@ -248,6 +276,13 @@ public class GameManager : MonoBehaviour
         Button btn = FindComponentRecursive<Button>(panel.transform, partialName);
         if (btn != null)
         {
+            if (Application.platform == RuntimePlatform.WebGLPlayer &&
+               (partialName.Contains("Quit") || action == QuitToDesktop))
+            {
+                btn.gameObject.SetActive(false);
+                return;
+            }
+
             btn.onClick.RemoveAllListeners();
             btn.onClick.AddListener(action);
         }
@@ -311,7 +346,6 @@ public class GameManager : MonoBehaviour
         {
             if (Time.timeScale == 0f) Time.timeScale = 1f;
             if (isIntroSequence) isIntroSequence = false;
-
             if (inGameHUD != null && !inGameHUD.activeSelf) inGameHUD.SetActive(true);
 
             UpdateHUD();
@@ -498,22 +532,36 @@ public class GameManager : MonoBehaviour
 
         if (highScoreInputGroup != null)
         {
-            highScoreInputGroup.SetActive(isHighScore);
+            if (hasSubmittedScore)
+            {
+                highScoreInputGroup.SetActive(false);
+            }
+            else
+            {
+                highScoreInputGroup.SetActive(isHighScore);
+            }
+
+            if (isHighScore && victoryTitleText) victoryTitleText.text = "NEW RECORD!";
+            else if (victoryTitleText) victoryTitleText.text = "TOUCHDOWN!";
         }
         else if (nameInputField != null)
         {
-            nameInputField.gameObject.SetActive(isHighScore);
+            nameInputField.gameObject.SetActive(isHighScore && !hasSubmittedScore);
         }
     }
 
     public void SubmitScore()
     {
+        if (hasSubmittedScore) return;
+
         if (nameInputField != null && LeaderboardManager.Instance != null)
         {
             string entryName = nameInputField.text;
             if (string.IsNullOrWhiteSpace(entryName)) entryName = "Unknown";
 
             LeaderboardManager.Instance.AddScore(entryName, finalTime, CurrentDown);
+
+            hasSubmittedScore = true;
 
             if (highScoreInputGroup) highScoreInputGroup.SetActive(false);
             else if (nameInputField) nameInputField.gameObject.SetActive(false);
@@ -549,23 +597,20 @@ public class GameManager : MonoBehaviour
 #endif
     }
 
-    public void OpenPauseSettings() { if (pausePanel) pausePanel.SetActive(false); if (pauseSettingsPanel) pauseSettingsPanel.SetActive(true); }
-    public void ClosePauseSettings() { if (pauseSettingsPanel) pauseSettingsPanel.SetActive(false); if (pausePanel) pausePanel.SetActive(true); }
+    void OnGUI()
+    {
+        if (!debugMode) return;
+        GUIStyle style = new GUIStyle(); style.fontSize = 20; style.normal.textColor = Color.yellow; style.fontStyle = FontStyle.Bold;
+        GUILayout.BeginArea(new Rect(10, 10, 400, 350), "DEBUG INFO", GUI.skin.window);
+        GUILayout.Label($"State: {currentState}", style);
+        string hudStatus = (inGameHUD != null) ? inGameHUD.activeSelf.ToString() : "NULL REF";
+        GUILayout.Label($"HUD Active: {hudStatus}", style);
 
-    //void OnGUI()
-    //{
-    //    if (!debugMode) return;
-    //    GUIStyle style = new GUIStyle(); style.fontSize = 20; style.normal.textColor = Color.yellow; style.fontStyle = FontStyle.Bold;
-    //    GUILayout.BeginArea(new Rect(10, 10, 400, 350), "DEBUG INFO", GUI.skin.window);
-    //    GUILayout.Label($"State: {currentState}", style);
-    //    string hudStatus = (inGameHUD != null) ? inGameHUD.activeSelf.ToString() : "NULL REF";
-    //    GUILayout.Label($"HUD Active: {hudStatus}", style);
+        GUILayout.Label("LOGS:", style);
+        for (int i = Mathf.Max(0, debugLog.Count - 3); i < debugLog.Count; i++)
+            GUILayout.Label(debugLog[i], style);
 
-    //    GUILayout.Label("LOGS:", style);
-    //    for (int i = Mathf.Max(0, debugLog.Count - 3); i < debugLog.Count; i++)
-    //        GUILayout.Label(debugLog[i], style);
-
-    //    if (GUILayout.Button("Force Restart")) RestartLevel();
-    //    GUILayout.EndArea();
-    //}
+        if (GUILayout.Button("Force Restart")) RestartLevel();
+        GUILayout.EndArea();
+    }
 }

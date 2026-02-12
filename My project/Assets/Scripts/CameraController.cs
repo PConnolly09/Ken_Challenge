@@ -10,26 +10,40 @@ public class CameraController : MonoBehaviour
     private CinemachinePositionComposer positionComposer;
     private CinemachineImpulseSource globalImpulseSource;
     private Rigidbody2D playerRb;
+    private PlayerController playerController;
 
     [Header("Zoom & Framing")]
     public float orthographicSize = 6f;
 
     [Header("Directional Framing")]
-    public float forwardBias = -0.2f;
-    public float backwardBias = 0.2f;
+    // Player on Left Third (0.3) when facing Right (Forward)
+    public float forwardBias = 0.3f;
+    // Player on Right Third (0.7) when facing Left (Backward)
+    public float backwardBias = 0.7f;
 
     [Header("Dynamic Panning")]
     public float switchThreshold = 0.1f;
-    public float minBiasSpeed = 0.4f;
-    public float maxBiasSpeed = 2.0f;
+
+    [Tooltip("Speed of camera pan when standing still (No Input, No Velocity).")]
+    public float minBiasSpeed = 0.2f;
+
+    [Tooltip("Speed of camera pan when moving fast OR holding input.")]
+    public float maxBiasSpeed = 2.5f;
     public float highSpeedThreshold = 6.0f;
 
-    public float turnDelay = 0.5f;
+    [Tooltip("Time in seconds the player must face the new direction while standing still before camera switches.")]
+    public float stationaryTurnDelay = 1.0f;
+
+    [Tooltip("Time in seconds the player must be continuously moving in the new direction before camera switches.")]
+    public float movingTurnDelay = 0.5f;
 
     private float currentXBias;
     private float currentBiasSpeed; // Internal smoother
     private bool isFacingRight = true;
-    private float turnTimer = 0f;
+
+    [Header("Debug")]
+    public float turnTimer = 0f;
+
     private float targetSize;
 
     private bool isCraneView = false;
@@ -50,12 +64,23 @@ public class CameraController : MonoBehaviour
         globalImpulseSource = GetComponent<CinemachineImpulseSource>();
 
         GameObject player = GameObject.FindGameObjectWithTag("Player");
-        if (player) playerRb = player.GetComponent<Rigidbody2D>();
+        if (player)
+        {
+            playerRb = player.GetComponent<Rigidbody2D>();
+            playerController = player.GetComponent<PlayerController>();
+
+            if (playerController)
+            {
+                // Initialize direction based on player visual scale
+                isFacingRight = playerController.transform.localScale.x > 0;
+            }
+        }
 
         if (virtualCamera != null)
         {
             positionComposer = virtualCamera.GetComponent<CinemachinePositionComposer>();
-            currentXBias = forwardBias;
+            // Ensure we start with a valid 0-1 range bias
+            currentXBias = isFacingRight ? forwardBias : backwardBias;
             targetSize = orthographicSize;
             ApplyCameraSettings();
         }
@@ -77,32 +102,57 @@ public class CameraController : MonoBehaviour
 
     private void HandleDirectionalFraming()
     {
-        if (playerRb == null || positionComposer == null) return;
+        if (playerRb == null || positionComposer == null || playerController == null) return;
 
+        // 1. Determine Player State
+        bool playerFacingRight = playerController.transform.localScale.x > 0;
         float velocityX = playerRb.linearVelocity.x;
+
+        // Determine Input State (Used to keep camera alive during collisions)
+        float inputX = 0f;
+        if (GameInput.Instance != null) inputX = GameInput.Instance.GetMovementInput().x;
+        else inputX = Input.GetAxisRaw("Horizontal");
+
+        // Are we moving? And are we moving in the direction we are facing?
+        // We consider "Moving" if we have velocity OR significant Input (prevents dead stop on collision)
+        bool isMoving = Mathf.Abs(velocityX) > 0.5f || Mathf.Abs(inputX) > 0.1f;
+
+        // Check if movement/input aligns with facing direction
+        float dirCheck = (Mathf.Abs(velocityX) > 0.1f) ? velocityX : inputX;
+        bool movingSameDir = isMoving && (Mathf.Sign(dirCheck) == (playerFacingRight ? 1f : -1f));
+
+        // 2. Check if we need to switch Camera Side
+        if (playerFacingRight != isFacingRight)
+        {
+            turnTimer += Time.deltaTime;
+
+            // Use different delays based on whether movement is committed
+            float requiredDelay = movingSameDir ? movingTurnDelay : stationaryTurnDelay;
+
+            if (turnTimer > requiredDelay)
+            {
+                isFacingRight = playerFacingRight;
+                turnTimer = 0f;
+            }
+        }
+        else
+        {
+            // Reset timer if player turns back to the original camera direction
+            turnTimer = 0f;
+        }
+
+        // 3. Calculate Pan Speed
+        // If we have Input, we maintain Max Speed even if velocity drops (e.g. pushing a box/package)
+        bool hasActiveInput = Mathf.Abs(inputX) > 0.1f;
         float absVel = Mathf.Abs(velocityX);
-        bool tryingToSwitch = false;
 
-        // 1. Detect Direction
-        if (isFacingRight && velocityX < -switchThreshold)
-        {
-            tryingToSwitch = true;
-            turnTimer += Time.deltaTime;
-            if (turnTimer > turnDelay) { isFacingRight = false; turnTimer = 0f; }
-        }
-        else if (!isFacingRight && velocityX > switchThreshold)
-        {
-            tryingToSwitch = true;
-            turnTimer += Time.deltaTime;
-            if (turnTimer > turnDelay) { isFacingRight = true; turnTimer = 0f; }
-        }
+        float targetSpeed = (absVel > highSpeedThreshold || hasActiveInput) ? maxBiasSpeed : minBiasSpeed;
 
-        if (!tryingToSwitch) turnTimer = 0f;
+        // Use a faster lerp to recover speed, slower to drop speed
+        float lerpSpeed = (targetSpeed > currentBiasSpeed) ? 5f : 2f;
+        currentBiasSpeed = Mathf.Lerp(currentBiasSpeed, targetSpeed, Time.deltaTime * lerpSpeed);
 
-        // 2. Smooth Dynamic Speed
-        float targetSpeed = (absVel > highSpeedThreshold) ? maxBiasSpeed : minBiasSpeed;
-        currentBiasSpeed = Mathf.Lerp(currentBiasSpeed, targetSpeed, Time.deltaTime * 2f); // Smooth accel
-
+        // 4. Apply Bias
         float targetX = isFacingRight ? forwardBias : backwardBias;
         currentXBias = Mathf.MoveTowards(currentXBias, targetX, currentBiasSpeed * Time.deltaTime);
 
@@ -120,7 +170,10 @@ public class CameraController : MonoBehaviour
         }
         else if (Input.GetAxisRaw("Vertical") < -0.5f) targetOffset = lookDownOffset;
 
-        bool fallingFast = playerRb.linearVelocity.y < -12f;
+        // Only apply falling offset if NOT grounded
+        bool isGrounded = playerController != null && playerController.IsGrounded;
+        bool fallingFast = !isGrounded && playerRb.linearVelocity.y < -12f;
+
         if (fallingFast) targetOffset = lookDownOffset;
 
         currentYOffset = Mathf.Lerp(currentYOffset, targetOffset, Time.deltaTime * lookShiftSpeed);
@@ -141,14 +194,15 @@ public class CameraController : MonoBehaviour
         if (active)
         {
             targetSize = 10f;
-            currentXBias = -0.4f;
+            currentXBias = 0.5f; // Center for crane view
             UpdateComposer();
         }
         else
         {
             targetSize = orthographicSize;
-            isFacingRight = true;
-            currentXBias = forwardBias;
+            // Reset to player framing
+            isFacingRight = playerController != null && playerController.transform.localScale.x > 0;
+            currentXBias = isFacingRight ? forwardBias : backwardBias;
         }
     }
 
@@ -162,7 +216,7 @@ public class CameraController : MonoBehaviour
         comp.HardLimits.Size = new Vector2(0.8f, 0.8f);
 
         positionComposer.Composition = comp;
-        positionComposer.Damping = new Vector3(horizontalDamping, 0f, 0f); // Removed vertical damp
+        positionComposer.Damping = new Vector3(horizontalDamping, 0f, 0f);
     }
 
     public void SetPlayerGrounded(bool grounded) { }

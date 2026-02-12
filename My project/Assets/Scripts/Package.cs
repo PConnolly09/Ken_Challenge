@@ -17,7 +17,7 @@ public class Package : MonoBehaviour
 
     [Header("Visuals")]
     public Color normalColor = Color.white;
-    public Color flashColor = new Color(1f, 0.8f, 0.5f, 1f); // Golden glow
+    public Color flashColor = new Color(1f, 0.8f, 0.5f, 1f);
     public float flashSpeed = 3f;
 
     [Header("Physics Settings")]
@@ -39,7 +39,6 @@ public class Package : MonoBehaviour
         settlingMaterial = new PhysicsMaterial2D("DeadBall") { bounciness = 0f, friction = 0.8f };
 
         if (fumbleMaterial != null) coll.sharedMaterial = fumbleMaterial;
-
         if (spriteRenderer) normalColor = spriteRenderer.color;
     }
 
@@ -72,6 +71,8 @@ public class Package : MonoBehaviour
 
     void Update()
     {
+        bool shouldFlash = true;
+
         if (isHeld)
         {
             if (targetAnchor == null)
@@ -82,17 +83,20 @@ public class Package : MonoBehaviour
             transform.position = targetAnchor.position;
             transform.rotation = targetAnchor.rotation;
 
-            // Reset Color
-            if (spriteRenderer) spriteRenderer.color = normalColor;
+            // If held by Player, STOP flashing. Otherwise (Enemy), keep flashing.
+            if (currentHolder is PlayerController) shouldFlash = false;
         }
-        else
+
+        if (shouldFlash) ApplyFlash();
+        else if (spriteRenderer) spriteRenderer.color = normalColor;
+    }
+
+    private void ApplyFlash()
+    {
+        if (spriteRenderer)
         {
-            // Flash Effect
-            if (spriteRenderer)
-            {
-                float t = Mathf.PingPong(Time.time * flashSpeed, 1f);
-                spriteRenderer.color = Color.Lerp(normalColor, flashColor, t);
-            }
+            float t = Mathf.PingPong(Time.time * flashSpeed, 1f);
+            spriteRenderer.color = Color.Lerp(normalColor, flashColor, t);
         }
     }
 
@@ -113,8 +117,6 @@ public class Package : MonoBehaviour
     public void Respawn()
     {
         SetHeld(false, null, null);
-        // Assuming GameManager handles respawn position or we reset to a safe spot. 
-        // For now, this just clears physics.
         rb.linearVelocity = Vector2.zero;
         coll.sharedMaterial = settlingMaterial;
         if (GameManager.Instance) GameManager.Instance.RecoverFumble();

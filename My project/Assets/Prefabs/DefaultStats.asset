@@ -16,35 +16,35 @@ MonoBehaviour:
     serializedVersion: 2
     m_Bits: 4160
   maxRunSpeed: 15
-  groundAccelerationTime: 0.25
+  groundAccelerationTime: 0.05
   groundDecelerationTime: 0.05
-  airAccelMult: 0.35
-  airDecelMult: 0.35
-  jumpHeight: 3.5
-  timeToJumpApex: 0.25
-  downwardGravityMult: 3
-  jumpCutGravityMult: 1.75
-  maxFallSpeed: 50
+  airAccelMult: 0.6
+  airDecelMult: 0.6
+  jumpHeight: 4.5
+  timeToJumpApex: 0.35
+  downwardGravityMult: 2.5
+  jumpCutGravityMult: 4
+  maxFallSpeed: 25
   momentumJumpBonus: 2
   apexThreshold: 2
-  apexGravityMult: 0.6
-  apexAirAccelMult: 1.15
+  apexGravityMult: 1
+  apexAirAccelMult: 1.2
   coyoteTime: 0.15
   jumpBufferTime: 0.15
-  cornerCorrectionDistance: 0.25
+  cornerCorrectionDistance: 0.1
   groundCheckRadius: 0.3
-  dashForce: 5
-  stiffArmForce: 10
-  stiffArmRange: 0.5
+  dashForce: 30
+  stiffArmForce: 15
+  stiffArmRange: 1.2
   stiffArmDuration: 0.3
-  speedPushMultiplier: 1
+  speedPushMultiplier: 0.5
   jukeDuration: 0.3
-  jukeCooldown: 1
+  jukeCooldown: 1.5
   spinDuration: 0.4
-  spinMoveForce: 5
+  spinMoveForce: 12
   baseFumbleChance: 0.05
-  fumblePickupDelay: 1.2
-  baseRunSpeed: 5
-  jukeColor: {r: 0.3962264, g: 0.21493414, b: 0.37305042, a: 0.5}
+  fumblePickupDelay: 1
+  baseRunSpeed: 8
+  jukeColor: {r: 1, g: 1, b: 1, a: 0.5}
   squashStretchAmount: 0.1
-  squashSpeed: 10
+  squashSpeed: 15
