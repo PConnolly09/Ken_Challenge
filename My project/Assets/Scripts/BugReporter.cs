@@ -13,6 +13,7 @@ public class BugReporter : MonoBehaviour
     [Header("UI References")]
     public GameObject reportPanel;
     public TMP_InputField userNoteInput;
+    public TMP_InputField nameInput; // NEW: Drag your Name input field here
     public Button sendButton;
     public TextMeshProUGUI statusText;
 
@@ -37,7 +38,6 @@ public class BugReporter : MonoBehaviour
         else
         {
             // Unpause if closing (ONLY if we were playing).
-            // If we were paused (e.g. opened from Pause Menu), we stay paused.
             if (GameManager.Instance && GameManager.Instance.currentState == GameManager.GameState.Playing)
                 Time.timeScale = 1f;
         }
@@ -65,23 +65,31 @@ public class BugReporter : MonoBehaviour
         string userNote = userNoteInput.text;
         if (string.IsNullOrWhiteSpace(userNote)) userNote = "No details provided.";
 
-        string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
-        string debugInfo = "N/A";
+        // NEW: Get Reporter Name
+        string reporterName = "Anonymous";
+        if (nameInput != null && !string.IsNullOrWhiteSpace(nameInput.text))
+        {
+            reporterName = nameInput.text;
+        }
 
+        string sceneName = UnityEngine.SceneManagement.SceneManager.GetActiveScene().name;
+
+        // NEW: Get Device Name for context
+        string deviceName = SystemInfo.deviceName;
+
+        string debugInfo = "N/A";
         if (GameManager.Instance)
         {
-            // Use the formatted debug info from GameManager
             debugInfo = GameManager.Instance.GetDebugInfo();
         }
 
         // Clean up strings for JSON
         string cleanNote = EscapeJson(userNote);
         string cleanDebug = EscapeJson(debugInfo);
+        string cleanReporter = EscapeJson(reporterName);
+        string cleanDevice = EscapeJson(deviceName);
 
         // 2. CONSTRUCT JSON PAYLOAD (Discord Embed Format)
-        // We build this manually to avoid external JSON library dependencies.
-        // Color 16711680 is Red.
-
         string jsonPayload = $@"
         {{
             ""username"": ""Bug Bot"",
@@ -91,9 +99,9 @@ public class BugReporter : MonoBehaviour
                     ""color"": 16711680,
                     ""fields"": [
                         {{
-                            ""name"": ""User Note"",
-                            ""value"": ""{cleanNote}"",
-                            ""inline"": false
+                            ""name"": ""Reporter"",
+                            ""value"": ""{cleanReporter}"",
+                            ""inline"": true
                         }},
                         {{
                             ""name"": ""Scene"",
@@ -101,9 +109,14 @@ public class BugReporter : MonoBehaviour
                             ""inline"": true
                         }},
                         {{
+                            ""name"": ""User Note"",
+                            ""value"": ""{cleanNote}"",
+                            ""inline"": false
+                        }},
+                        {{
                             ""name"": ""System"",
-                            ""value"": ""{Application.platform} | {Screen.width}x{Screen.height}"",
-                            ""inline"": true
+                            ""value"": ""{Application.platform} | {cleanDevice}"",
+                            ""inline"": false
                         }},
                         {{
                             ""name"": ""Game State"",
@@ -134,7 +147,8 @@ public class BugReporter : MonoBehaviour
                 Debug.Log("Discord Webhook sent successfully.");
                 yield return new WaitForSeconds(1.5f);
                 TogglePanel(); // Close UI
-                userNoteInput.text = ""; // Reset
+                if (userNoteInput) userNoteInput.text = "";
+                // We typically keep the name filled in for convenience
             }
             else
             {

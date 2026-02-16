@@ -18,7 +18,6 @@ public class PlayerController : MonoBehaviour
     public Transform stiffArmPoint;
     public Transform attachmentPoint;
     public GameObject packageObject;
-    public GameObject bloodSplatterPrefab;
 
     [Header("Audio")]
     public AudioClip jumpSfx;
@@ -27,7 +26,7 @@ public class PlayerController : MonoBehaviour
     public AudioClip stiffArmSfx;
     public AudioClip fumbleSfx;
     public AudioClip impactSfx;
-    [Range(0.1f, 1f)] public float footstepInterval = 0.35f;
+    [Range(0.1f, 1f)] public float footstepInterval = 0.3f;
 
     // --- STATE ---
     public bool IsGrounded { get; private set; }
@@ -65,8 +64,6 @@ public class PlayerController : MonoBehaviour
     private Vector3 originalScale;
     private Vector3 targetSquashScale;
 
-    private PhysicsMaterial2D noFrictionMat;
-
     void Awake()
     {
         rb = GetComponent<Rigidbody2D>();
@@ -76,20 +73,17 @@ public class PlayerController : MonoBehaviour
         audioSource = GetComponent<AudioSource>();
         spriteRenderer = GetComponent<SpriteRenderer>();
 
-        // We handle gravity manually
+        // Physics Setup
         rb.gravityScale = 0;
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
-        rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+        rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous; // Prevents tunneling at high speeds
         rb.constraints = RigidbodyConstraints2D.FreezeRotation;
-
-        noFrictionMat = new PhysicsMaterial2D("ZeroFriction") { friction = 0f, bounciness = 0f };
-        col.sharedMaterial = noFrictionMat;
 
         originalScale = transform.localScale;
         targetSquashScale = originalScale;
         if (spriteRenderer) normalColor = spriteRenderer.color;
 
-        // Ignore collision with the package we are holding
+        // Ignore collision with initial package
         if (packageObject != null && packageObject.TryGetComponent<Collider2D>(out var packColl))
         {
             Physics2D.IgnoreCollision(col, packColl, true);
@@ -98,24 +92,17 @@ public class PlayerController : MonoBehaviour
         CalculatePhysicsConstants();
     }
 
-    void OnValidate()
-    {
-        if (stats != null) CalculatePhysicsConstants();
-    }
-
     private void CalculatePhysicsConstants()
     {
-        // Safety check to prevent division by zero
-        if (stats.timeToJumpApex <= 0) stats.timeToJumpApex = 0.35f;
-
+        // Recalculate jump force based on new stats
+        if (stats.timeToJumpApex <= 0) stats.timeToJumpApex = 0.32f;
         _gravity = -(2 * stats.jumpHeight) / Mathf.Pow(stats.timeToJumpApex, 2);
         _jumpVelocity = Mathf.Abs(_gravity) * stats.timeToJumpApex;
     }
 
     void Update()
     {
-        if (GameManager.Instance == null) { _horizontalInput = 0; return; }
-        if (GameManager.Instance.isIntroSequence) { _horizontalInput = 0; return; }
+        if (GameManager.Instance && GameManager.Instance.isIntroSequence) return;
 
         if (isProne)
         {
@@ -125,114 +112,77 @@ public class PlayerController : MonoBehaviour
         }
 
         HandleInput();
-        UpdateTimers();
-        CheckGrounded();
+        // Ground check moved to FixedUpdate for physics sync
         HandleFootsteps();
         HandleSquashAndStretch();
         UpdateAnimations();
+        UpdateTimers();
     }
 
     void FixedUpdate()
     {
+        CheckGrounded(); // Check every physics step to prevent clipping
+
         if (isProne || isSpinning) return;
 
         CalculateMovement();
         HandleCornerCorrection();
 
-        // Apply final velocity to Rigidbody
         rb.linearVelocity = _velocity;
     }
 
+    // --- JUICED MOVEMENT LOGIC ---
     private void CalculateMovement()
     {
-        float penaltyFactor = Mathf.Max(0.1f, 1.0f - (attachmentCount * 0.3f));
-        if (_tackleDebuffTimer > 0) penaltyFactor *= 0.5f;
+        float penaltyFactor = Mathf.Max(0.3f, 1.0f - (attachmentCount * stats.speedPenaltyPerEnemy));
+        if (_tackleDebuffTimer > 0) penaltyFactor *= 0.6f;
 
         float targetSpeed = _horizontalInput * stats.maxRunSpeed * penaltyFactor;
 
-        // --- HORIZONTAL CALCULATION ---
+        // Horizontal
         float accelRate;
-
-        // Determine acceleration based on state (Ground vs Air, Accel vs Decel)
         if (IsGrounded)
         {
-            accelRate = (Mathf.Abs(targetSpeed) > 0.01f)
-               ? (1 / stats.groundAccelerationTime)
-               : (1 / stats.groundDecelerationTime);
+            accelRate = (Mathf.Abs(targetSpeed) > 0.01f) ? (1 / stats.groundAccelerationTime) : (1 / stats.groundDecelerationTime);
         }
         else
         {
-            accelRate = (Mathf.Abs(targetSpeed) > 0.01f)
-               ? (1 / stats.groundAccelerationTime) * stats.airAccelMult
-               : (1 / stats.groundDecelerationTime) * stats.airDecelMult;
+            accelRate = (Mathf.Abs(targetSpeed) > 0.01f) ? (1 / stats.groundAccelerationTime) * stats.airAccelMult : (1 / stats.groundDecelerationTime) * stats.airDecelMult;
         }
 
-        // Apex Boost: More control at the top of the jump
         bool isApex = !IsGrounded && Mathf.Abs(_velocity.y) < stats.apexThreshold;
-        if (isApex) accelRate *= stats.apexAirAccelMult;
+        if (isApex && Mathf.Abs(targetSpeed) > 0.01f) accelRate *= stats.apexAirAccelMult;
 
-        // Apply Horizontal Velocity
         _velocity.x = Mathf.MoveTowards(_velocity.x, targetSpeed, accelRate * stats.maxRunSpeed * Time.fixedDeltaTime);
 
-        // Snap to 0 if very slow and grounded (prevents sliding)
-        if (Mathf.Abs(_velocity.x) < 0.05f && Mathf.Abs(_horizontalInput) < 0.01f && IsGrounded)
-        {
-            _velocity.x = 0;
-        }
-
-        // --- VERTICAL CALCULATION ---
+        // Vertical
         if (IsGrounded && _velocity.y < 0)
         {
-            // IMPORTANT FIX: Reset velocity when grounded so gravity doesn't accumulate infinitely.
-            // We keep a small negative value to ensure ground checks still detect the floor.
             _velocity.y = -2f;
         }
         else
         {
-            // Apply Gravity
-            float gravityMult = 1f;
+            float gMult = 1f;
             if (GameInput.Instance != null)
             {
-                // Fast Fall (Holding Down) not implemented yet, but Jump Cut is:
-                if (_velocity.y > 0 && !GameInput.Instance.GetJumpHeld())
-                    gravityMult = stats.jumpCutGravityMult;
-                else if (_velocity.y < 0)
-                    gravityMult = stats.downwardGravityMult;
+                if (_velocity.y > 0 && !GameInput.Instance.GetJumpHeld()) gMult = stats.jumpCutGravityMult;
+                else if (_velocity.y < 0) gMult = stats.downwardGravityMult;
             }
+            if (isApex) gMult *= stats.apexGravityMult;
 
-            if (isApex) gravityMult *= stats.apexGravityMult;
-
-            _velocity.y += _gravity * gravityMult * Time.fixedDeltaTime;
+            _velocity.y += _gravity * gMult * Time.fixedDeltaTime;
             _velocity.y = Mathf.Max(_velocity.y, -stats.maxFallSpeed);
         }
 
-        // Flip Character
+        // Flip
         if (_horizontalInput != 0 && !isSpinning)
         {
             float dir = Mathf.Sign(_horizontalInput);
-            transform.localScale = new Vector3(Mathf.Abs(transform.localScale.x) * dir, transform.localScale.y, transform.localScale.z);
+            transform.localScale = new Vector3(Mathf.Abs(originalScale.x) * dir, originalScale.y, originalScale.z);
         }
     }
 
-    private void HandleFootsteps()
-    {
-        if (IsGrounded && Mathf.Abs(_horizontalInput) > 0.1f && !isProne)
-        {
-            _footstepTimer -= Time.deltaTime;
-            if (_footstepTimer <= 0)
-            {
-                float speedFactor = Mathf.Clamp(Mathf.Abs(_velocity.x) / stats.maxRunSpeed, 0.5f, 1.5f);
-                _footstepTimer = footstepInterval / speedFactor;
-
-                if (AudioManager.Instance) AudioManager.Instance.PlayRandomFootstep(false);
-                if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.footstepDustPrefab, groundCheck.position, 0.6f, 0.5f);
-            }
-        }
-        else
-        {
-            _footstepTimer = 0;
-        }
-    }
+    // --- INPUT & ABILITIES ---
 
     private void HandleInput()
     {
@@ -241,7 +191,6 @@ public class PlayerController : MonoBehaviour
         _horizontalInput = GameInput.Instance.GetMovementInput().x;
 
         if (GameInput.Instance.GetJumpDown()) _jumpBufferTimer = stats.jumpBufferTime;
-
         if (_jumpBufferTimer > 0 && _coyoteTimer > 0) ExecuteJump();
 
         if (GameInput.Instance.GetSpinDown() && !isSpinning) StartCoroutine(PerformSpinMove());
@@ -251,140 +200,109 @@ public class PlayerController : MonoBehaviour
 
     private void ExecuteJump()
     {
-        Debug.Log("JUMP EXECUTED"); // Debug Log for troubleshooting
         _jumpBufferTimer = 0;
         _coyoteTimer = 0;
 
-        float jumpPenaltyFactor = Mathf.Max(0f, 1.0f - (attachmentCount * 0.3f));
         float speedRatio = Mathf.Abs(_velocity.x) / stats.maxRunSpeed;
-        float baseJumpForce = _jumpVelocity + (stats.momentumJumpBonus * speedRatio);
-
-        // Apply Force
-        _velocity.y = baseJumpForce * jumpPenaltyFactor;
+        _velocity.y = _jumpVelocity + (stats.momentumJumpBonus * speedRatio);
 
         PlaySound(jumpSfx);
         if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.jumpDustPrefab, groundCheck.position);
         ApplyImpulseSquash(new Vector3(0.7f, 1.4f, 1f));
 
-        // Force grounded false immediately to prevent ground-sticking logic in same frame
         IsGrounded = false;
     }
 
-    private void CheckGrounded()
-    {
-        // If we are moving UP fast, we aren't grounded (prevents double jumps/snapping)
-        if (_velocity.y > 0.1f)
-        {
-            IsGrounded = false;
-            _coyoteTimer = 0;
-            if (CameraController.Instance) CameraController.Instance.SetPlayerGrounded(false);
-            return;
-        }
-
-        bool wasGrounded = IsGrounded;
-
-        // Null check for groundCheck
-        if (groundCheck == null)
-        {
-            Debug.LogError("PlayerController: GroundCheck missing!");
-            return;
-        }
-
-        IsGrounded = Physics2D.OverlapCircle(groundCheck.position, stats.groundCheckRadius, stats.groundLayer);
-
-        if (IsGrounded)
-        {
-            _coyoteTimer = stats.coyoteTime;
-
-            if (!wasGrounded)
-            {
-                if (_velocity.y < -5f)
-                {
-                    if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.landDustPrefab, groundCheck.position);
-                    ApplyImpulseSquash(new Vector3(1.3f, 0.7f, 1f));
-                }
-                if (CameraController.Instance) CameraController.Instance.SetPlayerGrounded(true);
-            }
-        }
-        else
-        {
-            _coyoteTimer -= Time.deltaTime;
-            if (CameraController.Instance) CameraController.Instance.SetPlayerGrounded(false);
-        }
-    }
-
-    private void HandleCornerCorrection()
-    {
-        if (_velocity.y <= 0) return;
-        Vector2 pos = transform.position;
-        Vector2 size = col.size;
-        Vector2 origin = new Vector2(pos.x, pos.y + (size.y * 0.5f));
-
-        RaycastHit2D hit = Physics2D.BoxCast(origin, new Vector2(size.x * 0.8f, 0.1f), 0, Vector2.up, 0.1f, stats.groundLayer);
-
-        if (hit)
-        {
-            float dist = hit.point.x - pos.x;
-            if (Mathf.Abs(dist) > (size.x / 2f) - stats.cornerCorrectionDistance)
-            {
-                float nudge = (dist > 0) ? -0.05f : 0.05f;
-                Vector3 p = transform.position;
-                p.x += nudge;
-                transform.position = p;
-            }
-        }
-    }
-
-    private void HandleSquashAndStretch()
-    {
-        targetSquashScale = Vector3.Lerp(targetSquashScale, originalScale, Time.deltaTime * stats.squashSpeed);
-        float direction = Mathf.Sign(transform.localScale.x);
-        transform.localScale = new Vector3(Mathf.Abs(targetSquashScale.x) * direction, targetSquashScale.y, 1f);
-    }
-
-    private void ApplyImpulseSquash(Vector3 scaleForce)
-    {
-        targetSquashScale = new Vector3(originalScale.x * scaleForce.x, originalScale.y * scaleForce.y, 1f);
-        float direction = Mathf.Sign(transform.localScale.x);
-        transform.localScale = new Vector3(Mathf.Abs(targetSquashScale.x) * direction, targetSquashScale.y, 1f);
-    }
+    // --- INTERACTIONS ---
 
     private void PerformStiffArm()
     {
-        StartCoroutine(StiffArmRoutine());
+        isStiffArming = true;
         anim.SetTrigger("StiffArmTrigger");
         PlaySound(stiffArmSfx);
-    }
 
-    private IEnumerator StiffArmRoutine()
-    {
-        isStiffArming = true;
-        CheckStiffArmHit();
-        yield return new WaitForSeconds(0.1f);
-        CheckStiffArmHit();
-        yield return new WaitForSeconds(0.2f);
-        isStiffArming = false;
-    }
+        // Cam Shake on Stiff Arm (New Juice)
+        if (CameraController.Instance) CameraController.Instance.Shake(stats.camShakeOnStiffArm);
 
-    private void CheckStiffArmHit()
-    {
         Collider2D[] enemies = Physics2D.OverlapCircleAll(stiffArmPoint.position, stats.stiffArmRange);
-        foreach (var enemyCol in enemies)
+        foreach (var eCol in enemies)
         {
-            if (enemyCol.CompareTag("Enemy"))
+            if (eCol.CompareTag("Enemy") && eCol.TryGetComponent<EnemyAI>(out var enemy))
             {
-                if (enemyCol.TryGetComponent<EnemyAI>(out var enemyScript) && !enemyScript.isKnockedBack)
+                if (!enemy.isKnockedBack)
                 {
                     float momentumBonus = Mathf.Abs(_velocity.x) * stats.speedPushMultiplier;
-                    Vector2 dir = new Vector2(transform.localScale.x, 0.2f).normalized;
+                    enemy.TakeHit(stats.stiffArmForce + momentumBonus, new Vector2(transform.localScale.x, 0.2f), false);
+                    if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.stiffArmImpactPrefab, eCol.transform.position);
 
-                    enemyScript.TakeHit(stats.stiffArmForce + momentumBonus, dir, false);
-                    if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.stiffArmImpactPrefab, enemyCol.transform.position);
-                    impulseSource.GenerateImpulse(0.5f);
+                    // Hit Stop (New Juice)
+                    StartCoroutine(HitStop(0.06f));
                     PlaySound(impactSfx);
                 }
             }
         }
+        Invoke(nameof(EndStiffArm), stats.stiffArmDuration);
+    }
+
+    private void EndStiffArm() => isStiffArming = false;
+
+    private IEnumerator PerformSpinMove()
+    {
+        isSpinning = true;
+        impulseSource.GenerateImpulse(0.3f);
+        PlaySound(spinSfx);
+        anim.SetTrigger("SpinTrigger");
+        if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.spinTrailPrefab, transform.position);
+
+        int playerLayer = gameObject.layer;
+        int enemyLayer = LayerMask.NameToLayer("Enemy");
+        Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, true);
+
+        // Spin Logic restored from original
+        if (attachmentCount == 0)
+        {
+            if (Mathf.Abs(_horizontalInput) > 0.1f)
+                _velocity = new Vector2(Mathf.Sign(_horizontalInput) * stats.spinMoveForce, 0);
+
+            Collider2D[] nearby = Physics2D.OverlapCircleAll(transform.position, 2.5f);
+            foreach (var col in nearby)
+            {
+                if (col.CompareTag("Enemy") && col.TryGetComponent<EnemyAI>(out var e))
+                    e.TakeHit(10f, (col.transform.position - transform.position).normalized, true);
+            }
+        }
+        else
+        {
+            _velocity = Vector2.zero;
+            if (attachedEnemies.Count > 0)
+            {
+                GameObject drop = attachedEnemies[0];
+                attachedEnemies.RemoveAt(0);
+                attachmentCount--;
+                UpdateUI();
+
+                drop.transform.SetParent(null);
+                drop.GetComponent<Collider2D>().enabled = true;
+                if (drop.TryGetComponent<Rigidbody2D>(out var erb)) { erb.simulated = true; }
+                if (drop.TryGetComponent<EnemyAI>(out var s))
+                {
+                    s.enabled = true;
+                    s.TakeHit(15f, new Vector2(Random.Range(-1f, 1f), 1f).normalized, true);
+                }
+                Physics2D.IgnoreCollision(col, drop.GetComponent<Collider2D>(), false);
+            }
+        }
+
+        float elapsed = 0;
+        while (elapsed < stats.spinDuration)
+        {
+            transform.localScale = new Vector3(-transform.localScale.x, originalScale.y, originalScale.z);
+            yield return new WaitForSeconds(0.05f);
+            elapsed += 0.05f;
+        }
+
+        isSpinning = false;
+        Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, false);
     }
 
     private IEnumerator PerformJuke()
@@ -404,64 +322,28 @@ public class PlayerController : MonoBehaviour
         isJuking = false;
     }
 
-    private IEnumerator PerformSpinMove()
+    // --- COLLISIONS & ATTACHMENTS ---
+
+    private void OnCollisionEnter2D(Collision2D collision)
     {
-        isSpinning = true;
-        impulseSource.GenerateImpulse(0.3f);
-        PlaySound(spinSfx);
-        anim.SetTrigger("SpinTrigger");
-        if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.spinTrailPrefab, transform.position);
-
-        int playerLayer = gameObject.layer;
-        int enemyLayer = LayerMask.NameToLayer("Enemy");
-        Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, true);
-
-        float facingDir = transform.localScale.x > 0 ? 1 : -1;
-        bool hasInput = Mathf.Abs(_horizontalInput) > 0.1f;
-
-        if (attachmentCount == 0)
+        // Safety: Stop falling immediately if we hit ground (prevents tunneling through floors)
+        if (((1 << collision.gameObject.layer) & stats.groundLayer) != 0)
         {
-            if (hasInput) _velocity = new Vector2(Mathf.Sign(_horizontalInput) * stats.spinMoveForce, 0);
-            else _velocity = Vector2.zero;
-
-            Collider2D[] nearby = Physics2D.OverlapCircleAll(transform.position, 2.5f);
-            foreach (var col in nearby)
+            if (_velocity.y < 0)
             {
-                if (col.CompareTag("Enemy") && col.TryGetComponent<EnemyAI>(out var e))
-                    e.TakeHit(10f, (col.transform.position - transform.position).normalized, true);
+                _velocity.y = 0;
+                rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0);
             }
         }
-        else
-        {
-            _velocity = Vector2.zero;
-            GameObject drop = attachedEnemies[0];
-            attachedEnemies.RemoveAt(0);
-            attachmentCount--;
-            UpdateUI();
 
-            drop.transform.SetParent(null);
-            Vector3 dropPos = drop.transform.position; dropPos.z = 0; drop.transform.position = dropPos;
-            drop.GetComponent<Collider2D>().enabled = true;
-            if (drop.TryGetComponent<Rigidbody2D>(out var erb)) erb.simulated = true;
-            if (drop.TryGetComponent<EnemyAI>(out var s)) { s.enabled = true; s.TakeHit(15f, new Vector2(Random.Range(-1f, 1f), 1f).normalized, true); }
-            Physics2D.IgnoreCollision(col, drop.GetComponent<Collider2D>(), false);
-        }
-
-        float elapsed = 0;
-        while (elapsed < stats.spinDuration)
-        {
-            transform.localScale = new Vector3(-transform.localScale.x, originalScale.y, originalScale.z);
-            yield return new WaitForSeconds(0.05f);
-            elapsed += 0.05f;
-        }
-
-        transform.localScale = new Vector3(_horizontalInput != 0 ? Mathf.Sign(_horizontalInput) : facingDir, originalScale.y, originalScale.z);
-        Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, false);
-        isSpinning = false;
+        HandleCollision(collision);
     }
 
-    private void AttemptPickup(Collision2D collision)
+    private void OnCollisionStay2D(Collision2D collision) => HandleCollision(collision);
+
+    private void HandleCollision(Collision2D collision)
     {
+        // Pickup
         if (!hasPackage && _pickupTimer <= 0 && collision.collider.CompareTag("Package"))
         {
             if (collision.gameObject.TryGetComponent<Package>(out var pkg) && !pkg.isHeld)
@@ -473,49 +355,41 @@ public class PlayerController : MonoBehaviour
                 PlaySound(jumpSfx);
             }
         }
-    }
 
-    private void OnCollisionEnter2D(Collision2D collision)
-    {
-        AttemptPickup(collision);
-
-        if (collision.collider.CompareTag("Enemy") && !isSpinning)
+        // Enemy Interactions
+        if (collision.collider.CompareTag("Enemy") && !isSpinning && !isJuking)
         {
             if (collision.gameObject.TryGetComponent<EnemyAI>(out var enemy))
             {
-                if (isStiffArming)
-                {
-                    enemy.TakeHit(30f, new Vector2(transform.localScale.x, 0.3f).normalized, false);
-                }
-                else if (enemy is MinionEnemy && !enemy.carriesPackage)
+                if (isStiffArming) return;
+
+                if (enemy is MinionEnemy && !enemy.carriesPackage)
                 {
                     AddAttachment(collision.gameObject);
                 }
                 else
                 {
-                    if (enemy is BruteEnemy) { _tackleDebuffTimer = 1.5f; PlaySound(impactSfx, 1.2f); }
+                    if (enemy is BruteEnemy) _tackleDebuffTimer = 1.5f;
                     ProcessFumble(0.2f);
                 }
             }
         }
     }
 
-    private void OnCollisionStay2D(Collision2D collision)
+    public void AddAttachment(GameObject enemy)
     {
-        AttemptPickup(collision);
-    }
+        if (isSpinning || isJuking || attachedEnemies.Contains(enemy)) return;
+        attachmentCount++;
+        attachedEnemies.Add(enemy);
+        UpdateUI();
 
-    private void HandleProneState()
-    {
-        if (GameInput.Instance != null && GameInput.Instance.GetJumpDown()) _proneTimer -= 0.2f;
+        Physics2D.IgnoreCollision(col, enemy.GetComponent<Collider2D>(), true);
+        enemy.GetComponent<EnemyAI>().enabled = false;
+        if (enemy.TryGetComponent<Rigidbody2D>(out var erb)) { erb.linearVelocity = Vector2.zero; erb.simulated = false; }
 
-        _proneTimer -= Time.deltaTime;
-        if (_proneTimer <= 0)
-        {
-            isProne = false;
-            rb.constraints = RigidbodyConstraints2D.FreezeRotation;
-            transform.rotation = Quaternion.identity;
-        }
+        enemy.transform.SetParent(attachmentPoint);
+        enemy.transform.localPosition = new Vector3(Random.Range(-0.4f, 0.4f), Random.Range(-0.2f, 0.3f), 0);
+        if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.attachPoofPrefab, enemy.transform.position);
     }
 
     public void ProcessFumble(float extraRisk = 0)
@@ -523,23 +397,54 @@ public class PlayerController : MonoBehaviour
         if (!hasPackage || isSpinning || isJuking) return;
         if (Random.value < (stats.baseFumbleChance + (attachmentCount * 0.15f) + extraRisk))
         {
-            hasPackage = false; _pickupTimer = stats.fumblePickupDelay;
-            if (packageObject != null && packageObject.TryGetComponent<Package>(out var pkg)) pkg.SetHeld(false, null, this);
-            impulseSource.GenerateImpulse(1.5f); PlaySound(fumbleSfx);
+            hasPackage = false;
+            _pickupTimer = stats.fumblePickupDelay;
+            if (packageObject != null && packageObject.TryGetComponent<Package>(out var pkg))
+                pkg.SetHeld(false, null, this);
+
+            impulseSource.GenerateImpulse(1.5f);
+            PlaySound(fumbleSfx);
             if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.fumbleExplosionPrefab, transform.position);
         }
     }
 
-    public void AddAttachment(GameObject enemy)
+    // --- HELPERS ---
+
+    private void CheckGrounded()
     {
-        if (isSpinning || isJuking || attachedEnemies.Contains(enemy)) return;
-        attachmentCount++; attachedEnemies.Add(enemy); UpdateUI();
-        Physics2D.IgnoreCollision(col, enemy.GetComponent<Collider2D>(), true);
-        enemy.GetComponent<EnemyAI>().enabled = false;
-        if (enemy.TryGetComponent<Rigidbody2D>(out var erb)) { erb.linearVelocity = Vector2.zero; erb.simulated = false; }
-        enemy.transform.SetParent(attachmentPoint);
-        enemy.transform.localPosition = new Vector3(Random.Range(-0.4f, 0.4f), Random.Range(-0.2f, 0.3f), 0);
-        if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.attachPoofPrefab, enemy.transform.position);
+        if (_velocity.y > 0.1f) { IsGrounded = false; return; }
+
+        bool wasGrounded = IsGrounded;
+        IsGrounded = Physics2D.OverlapCircle(groundCheck.position, stats.groundCheckRadius, stats.groundLayer);
+
+        if (IsGrounded)
+        {
+            _coyoteTimer = stats.coyoteTime;
+            if (!wasGrounded)
+            {
+                // Landing Impact Logic
+                if (_velocity.y < -10f)
+                {
+                    ApplyImpulseSquash(new Vector3(1.4f, 0.6f, 1f));
+                    StartCoroutine(HitStop(stats.landHitStop)); // Hit Stop!
+                    if (CameraController.Instance) CameraController.Instance.Shake(stats.camShakeOnLand); // Cam Shake!
+                    if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.landDustPrefab, groundCheck.position);
+                }
+            }
+        }
+        else
+        {
+            _coyoteTimer -= Time.deltaTime;
+        }
+    }
+
+    private IEnumerator HitStop(float duration)
+    {
+        if (duration <= 0) yield break;
+        float originalTime = Time.timeScale;
+        Time.timeScale = 0f;
+        yield return new WaitForSecondsRealtime(duration);
+        Time.timeScale = originalTime;
     }
 
     public void SetProne(float duration)
@@ -547,16 +452,47 @@ public class PlayerController : MonoBehaviour
         if (isJuking || isSpinning) return;
         isProne = true;
         _proneTimer = duration;
-        _velocity.x = 0;
+        _velocity = Vector2.zero;
         rb.linearVelocity = Vector2.zero;
-
         transform.rotation = Quaternion.Euler(0, 0, 90);
         impulseSource.GenerateImpulse(1.5f);
         PlaySound(impactSfx);
         ProcessFumble(0.4f);
-        if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.tackleImpactPrefab, transform.position);
     }
 
+    private void HandleProneState()
+    {
+        _proneTimer -= Time.deltaTime;
+        if (_proneTimer <= 0)
+        {
+            isProne = false;
+            transform.rotation = Quaternion.identity;
+        }
+    }
+
+    private void HandleCornerCorrection()
+    {
+        if (_velocity.y <= 0) return;
+        RaycastHit2D hit = Physics2D.BoxCast(new Vector2(transform.position.x, transform.position.y + 1f), new Vector2(col.size.x * 0.8f, 0.1f), 0, Vector2.up, 0.1f, stats.groundLayer);
+        if (hit && Mathf.Abs(hit.point.x - transform.position.x) > (col.size.x / 2f) - stats.cornerCorrectionDistance)
+            transform.position += new Vector3((hit.point.x - transform.position.x) > 0 ? -0.1f : 0.1f, 0, 0);
+    }
+
+    private void HandleSquashAndStretch()
+    {
+        targetSquashScale = Vector3.Lerp(targetSquashScale, originalScale, Time.deltaTime * stats.squashSpeed);
+        float dir = Mathf.Sign(transform.localScale.x);
+        transform.localScale = new Vector3(Mathf.Abs(targetSquashScale.x) * dir, targetSquashScale.y, 1f);
+    }
+    private void ApplyImpulseSquash(Vector3 scale) => targetSquashScale = scale;
+    private void HandleFootsteps()
+    {
+        if (IsGrounded && Mathf.Abs(_horizontalInput) > 0.1f && !isProne)
+        {
+            _footstepTimer -= Time.deltaTime;
+            if (_footstepTimer <= 0) { _footstepTimer = footstepInterval; if (AudioManager.Instance) AudioManager.Instance.PlayRandomFootstep(false); }
+        }
+    }
     private void UpdateTimers()
     {
         if (_jumpBufferTimer > 0) _jumpBufferTimer -= Time.deltaTime;
@@ -564,18 +500,7 @@ public class PlayerController : MonoBehaviour
         if (_pickupTimer > 0) _pickupTimer -= Time.deltaTime;
         if (_tackleDebuffTimer > 0) _tackleDebuffTimer -= Time.deltaTime;
     }
-
-    private void UpdateAnimations()
-    {
-        if (anim == null) return;
-        float s = Mathf.Abs(rb.linearVelocity.x);
-        anim.SetFloat("Speed", s);
-        anim.SetFloat("RunMultiplier", Mathf.Clamp(s / stats.baseRunSpeed, 0.5f, 3f));
-        anim.SetBool("isGrounded", IsGrounded);
-        anim.SetBool("isProne", isProne);
-    }
-
+    private void UpdateAnimations() { if (anim) { anim.SetFloat("Speed", Mathf.Abs(_velocity.x)); anim.SetBool("isGrounded", IsGrounded); anim.SetBool("isProne", isProne); } }
     private void UpdateUI() { if (GameManager.Instance) GameManager.Instance.UpdateAttachmentCount(attachmentCount); }
-    private void PlaySound(AudioClip c, float v = 1f) { if (c && audioSource) audioSource.PlayOneShot(c, v); }
-    private void OnDrawGizmosSelected() { if (groundCheck) Gizmos.DrawWireSphere(groundCheck.position, stats.groundCheckRadius); if (stiffArmPoint) { Gizmos.color = Color.red; Gizmos.DrawWireSphere(stiffArmPoint.position, stats.stiffArmRange); } }
+    private void PlaySound(AudioClip c) { if (c && audioSource) audioSource.PlayOneShot(c); }
 }
