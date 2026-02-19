@@ -627,6 +627,7 @@ GameObject:
   - component: {fileID: 115607138}
   - component: {fileID: 115607137}
   - component: {fileID: 115607136}
+  - component: {fileID: 115607139}
   m_Layer: 6
   m_Name: Ground_Tilemap
   m_TagString: Ground
@@ -8056,6 +8057,29 @@ TilemapCollider2D:
   m_MaximumTileChangeCount: 1000
   m_ExtrusionFactor: 0
   m_UseDelaunayMesh: 0
+--- !u!114 &115607139
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 115607132}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 19f34a62957e6674e9b98936bb3caa3e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::JumpMapVisualizer
+  stats: {fileID: 11400000, guid: 12e740b77be683c4d801bf57f8bd9609, type: 2}
+  groundTilemap: {fileID: 115607135}
+  drawRadius: 10
+  tileResolution: 1
+  showRunningJump: 1
+  ascentColor: {r: 0.3726415, g: 1, b: 0.3726415, a: 0.6}
+  descentColor: {r: 1, g: 0, b: 0, a: 0.6}
+  showStandingJump: 0
+  standingJumpColor: {r: 1, g: 1, b: 0, a: 0.3}
+  steps: 13
+  timeStep: 0.05
 --- !u!1001 &252686386
 PrefabInstance:
   m_ObjectHideFlags: 0
