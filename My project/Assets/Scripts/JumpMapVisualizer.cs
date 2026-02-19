@@ -28,6 +28,12 @@ public class JumpMapVisualizer : MonoBehaviour
     [Range(0, 5)]
     public int simulatedMinions = 0;
 
+    [Header("Origin Settings (Edges & Coyote Time)")]
+    [Tooltip("If true, trajectories are drawn from the outer edges of the tile, not the center.")]
+    public bool drawFromEdges = true;
+    [Tooltip("If true, offsets the starting point out into the air based on your Coyote Time and Speed.")]
+    public bool includeCoyoteTime = true;
+
     [Header("Visual Settings")]
     public bool showRunningJump = true;
     [Tooltip("Color for the upward portion of the jump (Takeoff).")]
@@ -64,48 +70,71 @@ public class JumpMapVisualizer : MonoBehaviour
         // Optimization: Only scan bounds within range
         BoundsInt bounds = groundTilemap.cellBounds;
 
-        // Convert world range to cell range roughly
         Vector3Int minRange = groundTilemap.WorldToCell(camPos - new Vector3(drawRadius, drawRadius, 0));
         Vector3Int maxRange = groundTilemap.WorldToCell(camPos + new Vector3(drawRadius, drawRadius, 0));
 
-        // Clamp to actual map bounds
         int xMin = Mathf.Max(bounds.xMin, minRange.x);
         int xMax = Mathf.Min(bounds.xMax, maxRange.x);
         int yMin = Mathf.Max(bounds.yMin, minRange.y);
         int yMax = Mathf.Min(bounds.yMax, maxRange.y);
 
-        // Calculate effective speed based on modifiers
         float penaltyFactor = Mathf.Max(0.3f, 1.0f - (simulatedMinions * stats.speedPenaltyPerEnemy));
         float effectiveSpeed = stats.maxRunSpeed * penaltyFactor * speedMultiplier;
 
-        // Apply resolution skip
+        float edgeOffset = groundTilemap.cellSize.x / 2f;
+        float coyoteOffset = 0f;
+
+        if (includeCoyoteTime && stats != null)
+        {
+            // Distance = Speed * Time. This is exactly how far past the edge they can get.
+            coyoteOffset = effectiveSpeed * stats.coyoteTime;
+        }
+
         for (int x = xMin; x <= xMax; x += tileResolution)
         {
             for (int y = yMin; y <= yMax; y += tileResolution)
             {
                 Vector3Int cellPos = new Vector3Int(x, y, 0);
 
-                // 1. Is there a block here?
                 if (!groundTilemap.HasTile(cellPos)) continue;
+                if (groundTilemap.HasTile(cellPos + Vector3Int.up)) continue; // Surface check
 
-                // 2. Is the space ABOVE it empty? (i.e., is it a surface?)
-                if (groundTilemap.HasTile(cellPos + Vector3Int.up)) continue;
-
-                // 3. Draw Trajectories
-                Vector3 worldPos = groundTilemap.GetCellCenterWorld(cellPos);
-                worldPos.y += 0.5f; // Top of tile
+                Vector3 centerPos = groundTilemap.GetCellCenterWorld(cellPos);
+                centerPos.y += groundTilemap.cellSize.y / 2f; // Top of tile
 
                 if (showRunningJump)
                 {
-                    // Pass true to use ascent/descent colors
-                    DrawTrajectory(worldPos, effectiveSpeed, true, Color.white);
-                    DrawTrajectory(worldPos, -effectiveSpeed, true, Color.white);
+                    if (drawFromEdges)
+                    {
+                        // Right-bound jump (Start from Right Edge + Coyote Time)
+                        Vector3 rightStart = centerPos + new Vector3(edgeOffset + coyoteOffset, 0, 0);
+                        DrawTrajectory(rightStart, effectiveSpeed, true, Color.white);
+
+                        // Left-bound jump (Start from Left Edge + Coyote Time)
+                        Vector3 leftStart = centerPos - new Vector3(edgeOffset + coyoteOffset, 0, 0);
+                        DrawTrajectory(leftStart, -effectiveSpeed, true, Color.white);
+                    }
+                    else
+                    {
+                        DrawTrajectory(centerPos, effectiveSpeed, true, Color.white);
+                        DrawTrajectory(centerPos, -effectiveSpeed, true, Color.white);
+                    }
                 }
 
                 if (showStandingJump)
                 {
-                    // Pass false to use single color
-                    DrawTrajectory(worldPos, 0f, false, standingJumpColor);
+                    if (drawFromEdges)
+                    {
+                        // Standing jumps don't really use coyote time distance because speed is 0
+                        Vector3 rightEdge = centerPos + new Vector3(edgeOffset, 0, 0);
+                        Vector3 leftEdge = centerPos - new Vector3(edgeOffset, 0, 0);
+                        DrawTrajectory(rightEdge, 0f, false, standingJumpColor);
+                        DrawTrajectory(leftEdge, 0f, false, standingJumpColor);
+                    }
+                    else
+                    {
+                        DrawTrajectory(centerPos, 0f, false, standingJumpColor);
+                    }
                 }
             }
         }
@@ -141,7 +170,6 @@ public class JumpMapVisualizer : MonoBehaviour
 
             if (usePhaseColor)
             {
-                // Green for Up, Red for Down
                 Gizmos.color = currentVelocity.y > 0 ? ascentColor : descentColor;
             }
             else

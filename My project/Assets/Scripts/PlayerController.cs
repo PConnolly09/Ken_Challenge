@@ -37,6 +37,11 @@ public class PlayerController : MonoBehaviour
     public bool hasPackage = true;
     public int attachmentCount = 0;
 
+    // --- SURFACE MODIFIERS ---
+    private SurfaceZone currentSurface;
+    private bool isInQuicksand = false;
+    private bool isInOil = false;
+
     // --- INTERNAL PHYSICS ---
     private Rigidbody2D rb;
     private CapsuleCollider2D col;
@@ -76,7 +81,7 @@ public class PlayerController : MonoBehaviour
         // Physics Setup
         rb.gravityScale = 0;
         rb.interpolation = RigidbodyInterpolation2D.Interpolate;
-        rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous; // Prevents tunneling at high speeds
+        rb.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
         rb.constraints = RigidbodyConstraints2D.FreezeRotation;
 
         originalScale = transform.localScale;
@@ -94,7 +99,6 @@ public class PlayerController : MonoBehaviour
 
     private void CalculatePhysicsConstants()
     {
-        // Recalculate jump force based on new stats
         if (stats.timeToJumpApex <= 0) stats.timeToJumpApex = 0.32f;
         _gravity = -(2 * stats.jumpHeight) / Mathf.Pow(stats.timeToJumpApex, 2);
         _jumpVelocity = Mathf.Abs(_gravity) * stats.timeToJumpApex;
@@ -112,7 +116,17 @@ public class PlayerController : MonoBehaviour
         }
 
         HandleInput();
-        // Ground check moved to FixedUpdate for physics sync
+
+        // Handle One-Way Platform Drop Down
+        if (GameInput.Instance != null && IsGrounded)
+        {
+            float yInput = GameInput.Instance.GetMovementInput().y;
+            if (yInput < -0.7f && GameInput.Instance.GetJumpDown())
+            {
+                StartCoroutine(DisableOneWayCollision());
+            }
+        }
+
         HandleFootsteps();
         HandleSquashAndStretch();
         UpdateAnimations();
@@ -121,7 +135,7 @@ public class PlayerController : MonoBehaviour
 
     void FixedUpdate()
     {
-        CheckGrounded(); // Check every physics step to prevent clipping
+        CheckGrounded();
 
         if (isProne || isSpinning) return;
 
@@ -131,19 +145,57 @@ public class PlayerController : MonoBehaviour
         rb.linearVelocity = _velocity;
     }
 
-    // --- JUICED MOVEMENT LOGIC ---
+    // --- OUT OF BOUNDS LOGIC ---
+    public void OutOfBounds()
+    {
+        // Stop the player in their tracks so they don't fall forever
+        _velocity = Vector2.zero;
+        rb.linearVelocity = Vector2.zero;
+        rb.simulated = false;
+
+        // Hide player so they don't awkwardly float in the void
+        if (spriteRenderer) spriteRenderer.enabled = false;
+
+        // Guarantee a fumble so the play ends visually
+        if (hasPackage) ProcessFumble(1.0f);
+
+        // Visual / Audio Feedback
+        if (CameraController.Instance) CameraController.Instance.Shake(2f);
+        if (EffectManager.Instance)
+            EffectManager.Instance.PlayEffect(EffectManager.Instance.fumbleExplosionPrefab, transform.position);
+
+        // Tell the GameManager to burn a down
+        if (GameManager.Instance)
+        {
+            GameManager.Instance.UseDown();
+        }
+    }
+
+    // --- MOVEMENT LOGIC ---
     private void CalculateMovement()
     {
         float penaltyFactor = Mathf.Max(0.3f, 1.0f - (attachmentCount * stats.speedPenaltyPerEnemy));
         if (_tackleDebuffTimer > 0) penaltyFactor *= 0.6f;
 
+        if (isInQuicksand && currentSurface != null) penaltyFactor *= currentSurface.moveSpeedPenalty;
+
         float targetSpeed = _horizontalInput * stats.maxRunSpeed * penaltyFactor;
 
-        // Horizontal
         float accelRate;
+
         if (IsGrounded)
         {
-            accelRate = (Mathf.Abs(targetSpeed) > 0.01f) ? (1 / stats.groundAccelerationTime) : (1 / stats.groundDecelerationTime);
+            float surfaceAccelMult = (isInOil && currentSurface != null) ? currentSurface.accelerationMultiplier : 1.0f;
+            float surfaceFrictionMult = (isInOil && currentSurface != null) ? currentSurface.frictionMultiplier : 1.0f;
+
+            if (Mathf.Abs(targetSpeed) > 0.01f)
+            {
+                accelRate = (1 / stats.groundAccelerationTime) * surfaceAccelMult;
+            }
+            else
+            {
+                accelRate = (1 / stats.groundDecelerationTime) * surfaceFrictionMult;
+            }
         }
         else
         {
@@ -155,8 +207,12 @@ public class PlayerController : MonoBehaviour
 
         _velocity.x = Mathf.MoveTowards(_velocity.x, targetSpeed, accelRate * stats.maxRunSpeed * Time.fixedDeltaTime);
 
-        // Vertical
-        if (IsGrounded && _velocity.y < 0)
+        // --- Vertical ---
+        if (isInQuicksand && currentSurface != null)
+        {
+            _velocity.y = currentSurface.sinkingSpeed;
+        }
+        else if (IsGrounded && _velocity.y < 0)
         {
             _velocity.y = -2f;
         }
@@ -182,8 +238,6 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    // --- INPUT & ABILITIES ---
-
     private void HandleInput()
     {
         if (GameInput.Instance == null) return;
@@ -191,7 +245,7 @@ public class PlayerController : MonoBehaviour
         _horizontalInput = GameInput.Instance.GetMovementInput().x;
 
         if (GameInput.Instance.GetJumpDown()) _jumpBufferTimer = stats.jumpBufferTime;
-        if (_jumpBufferTimer > 0 && _coyoteTimer > 0) ExecuteJump();
+        if (_jumpBufferTimer > 0 && (_coyoteTimer > 0 || isInQuicksand)) ExecuteJump();
 
         if (GameInput.Instance.GetSpinDown() && !isSpinning) StartCoroutine(PerformSpinMove());
         if (GameInput.Instance.GetStiffArmDown() && !isStiffArming) PerformStiffArm();
@@ -204,24 +258,65 @@ public class PlayerController : MonoBehaviour
         _coyoteTimer = 0;
 
         float speedRatio = Mathf.Abs(_velocity.x) / stats.maxRunSpeed;
-        _velocity.y = _jumpVelocity + (stats.momentumJumpBonus * speedRatio);
+        float baseJump = _jumpVelocity;
+
+        if (isInQuicksand && currentSurface != null) baseJump *= currentSurface.jumpPowerPenalty;
+
+        _velocity.y = baseJump + (stats.momentumJumpBonus * speedRatio);
 
         PlaySound(jumpSfx);
         if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.jumpDustPrefab, groundCheck.position);
         ApplyImpulseSquash(new Vector3(0.7f, 1.4f, 1f));
 
         IsGrounded = false;
+        isInQuicksand = false;
     }
 
-    // --- INTERACTIONS ---
+    // --- INTERACTIONS & EXTERNAL CALLS ---
+
+    public Vector2 GetVelocity() => _velocity;
+
+    public void ApplySpringForce(float force, bool resetVelocity)
+    {
+        if (resetVelocity) _velocity.y = 0;
+        _velocity.y += force;
+        IsGrounded = false;
+        _coyoteTimer = 0;
+        ApplyImpulseSquash(new Vector3(0.6f, 1.5f, 1f));
+    }
+
+    public void EnterSurfaceZone(SurfaceZone zone)
+    {
+        currentSurface = zone;
+        if (zone.zoneType == SurfaceZone.ZoneType.OilSlick) isInOil = true;
+        else if (zone.zoneType == SurfaceZone.ZoneType.Quicksand) isInQuicksand = true;
+    }
+
+    public void ExitSurfaceZone(SurfaceZone zone)
+    {
+        if (currentSurface == zone)
+        {
+            isInOil = false;
+            isInQuicksand = false;
+            currentSurface = null;
+        }
+    }
+
+    private IEnumerator DisableOneWayCollision()
+    {
+        Collider2D[] platformColliders = Physics2D.OverlapCircleAll(groundCheck.position, 0.2f, stats.groundLayer);
+        foreach (var platform in platformColliders) Physics2D.IgnoreCollision(col, platform, true);
+        yield return new WaitForSeconds(0.4f);
+        foreach (var platform in platformColliders) Physics2D.IgnoreCollision(col, platform, false);
+    }
+
+    // --- STANDARD ABILITIES ---
 
     private void PerformStiffArm()
     {
         isStiffArming = true;
         anim.SetTrigger("StiffArmTrigger");
         PlaySound(stiffArmSfx);
-
-        // Cam Shake on Stiff Arm (New Juice)
         if (CameraController.Instance) CameraController.Instance.Shake(stats.camShakeOnStiffArm);
 
         Collider2D[] enemies = Physics2D.OverlapCircleAll(stiffArmPoint.position, stats.stiffArmRange);
@@ -234,8 +329,6 @@ public class PlayerController : MonoBehaviour
                     float momentumBonus = Mathf.Abs(_velocity.x) * stats.speedPushMultiplier;
                     enemy.TakeHit(stats.stiffArmForce + momentumBonus, new Vector2(transform.localScale.x, 0.2f), false);
                     if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.stiffArmImpactPrefab, eCol.transform.position);
-
-                    // Hit Stop (New Juice)
                     StartCoroutine(HitStop(0.06f));
                     PlaySound(impactSfx);
                 }
@@ -258,7 +351,6 @@ public class PlayerController : MonoBehaviour
         int enemyLayer = LayerMask.NameToLayer("Enemy");
         Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, true);
 
-        // Spin Logic restored from original
         if (attachmentCount == 0)
         {
             if (Mathf.Abs(_horizontalInput) > 0.1f)
@@ -326,7 +418,6 @@ public class PlayerController : MonoBehaviour
 
     private void OnCollisionEnter2D(Collision2D collision)
     {
-        // Safety: Stop falling immediately if we hit ground (prevents tunneling through floors)
         if (((1 << collision.gameObject.layer) & stats.groundLayer) != 0)
         {
             if (_velocity.y < 0)
@@ -335,7 +426,6 @@ public class PlayerController : MonoBehaviour
                 rb.linearVelocity = new Vector2(rb.linearVelocity.x, 0);
             }
         }
-
         HandleCollision(collision);
     }
 
@@ -343,7 +433,6 @@ public class PlayerController : MonoBehaviour
 
     private void HandleCollision(Collision2D collision)
     {
-        // Pickup
         if (!hasPackage && _pickupTimer <= 0 && collision.collider.CompareTag("Package"))
         {
             if (collision.gameObject.TryGetComponent<Package>(out var pkg) && !pkg.isHeld)
@@ -356,17 +445,13 @@ public class PlayerController : MonoBehaviour
             }
         }
 
-        // Enemy Interactions
         if (collision.collider.CompareTag("Enemy") && !isSpinning && !isJuking)
         {
             if (collision.gameObject.TryGetComponent<EnemyAI>(out var enemy))
             {
                 if (isStiffArming) return;
 
-                if (enemy is MinionEnemy && !enemy.carriesPackage)
-                {
-                    AddAttachment(collision.gameObject);
-                }
+                if (enemy is MinionEnemy && !enemy.carriesPackage) AddAttachment(collision.gameObject);
                 else
                 {
                     if (enemy is BruteEnemy) _tackleDebuffTimer = 1.5f;
@@ -422,12 +507,11 @@ public class PlayerController : MonoBehaviour
             _coyoteTimer = stats.coyoteTime;
             if (!wasGrounded)
             {
-                // Landing Impact Logic
                 if (_velocity.y < -10f)
                 {
                     ApplyImpulseSquash(new Vector3(1.4f, 0.6f, 1f));
-                    StartCoroutine(HitStop(stats.landHitStop)); // Hit Stop!
-                    if (CameraController.Instance) CameraController.Instance.Shake(stats.camShakeOnLand); // Cam Shake!
+                    StartCoroutine(HitStop(stats.landHitStop));
+                    if (CameraController.Instance) CameraController.Instance.Shake(stats.camShakeOnLand);
                     if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.landDustPrefab, groundCheck.position);
                 }
             }
@@ -467,6 +551,9 @@ public class PlayerController : MonoBehaviour
         {
             isProne = false;
             transform.rotation = Quaternion.identity;
+
+            rb.simulated = true;
+            if (spriteRenderer) spriteRenderer.enabled = true;
         }
     }
 

@@ -942,7 +942,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1747886023761954ca6efa12fb1489b9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BugReporter
-  discordWebhookURL: https://discord.com/api/webhooks/1469063931057278996/VLIv6-gOOZLwdo3K0yaJq6zfOrT-7PMXGnbOXfwi_WKF_ZIERzt-ssLHzesQWZ-Zu9Yq
+  discordWebhookURL: 
   reportPanel: {fileID: 7280687086354168242}
   userNoteInput: {fileID: 6613580289698250322}
   nameInput: {fileID: 0}

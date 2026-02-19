@@ -232,9 +232,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SplashScreen
   splashScreens:
   - splashGroup: {fileID: 745847160}
-    fadeInTime: 1
-    showTime: 3
-    fadeOutTime: 1
+    fadeInTime: 2
+    showTime: 5
+    fadeOutTime: 2
   - splashGroup: {fileID: 1431747855}
     fadeInTime: 1
     showTime: 2
@@ -602,13 +602,13 @@ MonoBehaviour:
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
-  m_Maskable: 1
+  m_Maskable: 0
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
   m_Sprite: {fileID: 21300000, guid: 40d6996bc699ce849b063e225d620427, type: 3}
   m_Type: 0
-  m_PreserveAspect: 0
+  m_PreserveAspect: 1
   m_FillCenter: 1
   m_FillMethod: 4
   m_FillAmount: 1
@@ -696,7 +696,7 @@ MonoBehaviour:
       m_Calls: []
   m_Sprite: {fileID: 21300000, guid: 29a37687d5e31e241a213dd9bb5eb9b1, type: 3}
   m_Type: 0
-  m_PreserveAspect: 0
+  m_PreserveAspect: 1
   m_FillCenter: 1
   m_FillMethod: 4
   m_FillAmount: 1
