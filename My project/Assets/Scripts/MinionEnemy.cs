@@ -2,7 +2,6 @@ using UnityEngine;
 
 public class MinionEnemy : EnemyAI
 {
-
     [Header("Minion Jump")]
     public float jumpForce = 12f;
 
@@ -17,17 +16,27 @@ public class MinionEnemy : EnemyAI
         {
             Move(Mathf.Sign(xDiff), moveSpeed * 1.2f);
 
-            // Inside MinionEnemy.Chase()
             if (CheckWallAhead())
             {
-                // Jump logic here
-                rb.AddForce(Vector2.up * jumpForce, ForceMode2D.Impulse);
-                // Don't flip immediately, try to clear it
+                // FIX: Use proper jumping logic instead of spamming raw Force every frame
+                AttemptNavigationJump();
             }
         }
         else
         {
             rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+        }
+    }
+
+    protected override void Die()
+    {
+        if (TryGetComponent<PooledMinion>(out var poolHelper))
+        {
+            poolHelper.DieAndReturnToPool();
+        }
+        else
+        {
+            base.Die();
         }
     }
 

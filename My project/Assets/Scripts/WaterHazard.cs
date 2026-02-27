@@ -43,7 +43,6 @@ public class WaterHazard : MonoBehaviour
                     else
                     {
                         Debug.Log("Loose ball hit water - Respawning...");
-                        pkg.Respawn();
                     }
                 }
             }

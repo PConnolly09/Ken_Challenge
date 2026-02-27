@@ -1,7 +1,6 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using TMPro;
-using UnityEngine.UI;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -19,7 +18,7 @@ public class GameManager : MonoBehaviour
     private bool debugMode = true;
     private bool hasSubmittedScore = false;
 
-    [Header("UI Panels (Auto-Assigned)")]
+    [Header("UI Panels (Auto-Assigned by SceneUIManager)")]
     public GameObject mainMenuPanel;
     public GameObject inGameHUD;
     public GameObject fumbleHUD;
@@ -27,12 +26,10 @@ public class GameManager : MonoBehaviour
     public GameObject victoryPanel;
     public GameObject highScoreInputGroup;
     public GameObject downNotificationPanel;
-
-    [Header("Pause UI")]
     public GameObject pausePanel;
     public GameObject pauseSettingsPanel;
 
-    [Header("HUD Elements")]
+    [Header("HUD Elements (Auto-Assigned by SceneUIManager)")]
     public TextMeshProUGUI yardsText;
     public TextMeshProUGUI downsText;
     public TextMeshProUGUI attachedText;
@@ -58,8 +55,10 @@ public class GameManager : MonoBehaviour
     private float startTime;
     private float finalTime;
 
-    private PlayerController _cachedPlayerController;
+    // State Memory for Pausing
+    private GameState stateBeforePause;
 
+    private PlayerController _cachedPlayerController;
     private List<string> debugLog = new List<string>();
 
     void Awake()
@@ -105,6 +104,7 @@ public class GameManager : MonoBehaviour
 
     IEnumerator InitializeLevelRoutine()
     {
+        // Wait for SceneUIManager to register UI references naturally on Start
         yield return null;
 
         if (playerTransform == null)
@@ -121,8 +121,6 @@ public class GameManager : MonoBehaviour
         if (_cachedPlayerController) _cachedPlayerController.enabled = true;
         isIntroSequence = false;
         hasSubmittedScore = false;
-
-        LocateUIReferences();
 
         if (AutoStartNextLoad)
         {
@@ -161,7 +159,6 @@ public class GameManager : MonoBehaviour
         string pVel = _cachedPlayerController ? _cachedPlayerController.GetComponent<Rigidbody2D>().linearVelocity.ToString() : "null";
         string pkgHeld = "unknown";
 
-        // Find package status safely
         if (currentPackageTransform) pkgHeld = "Fumbled (Floor)";
         else if (_cachedPlayerController && _cachedPlayerController.hasPackage) pkgHeld = "Player";
         else pkgHeld = "Unknown/Enemy";
@@ -175,164 +172,30 @@ public class GameManager : MonoBehaviour
                $"Scene: {SceneManager.GetActiveScene().name}";
     }
 
-    private void LocateUIReferences()
+    // --- EXPLICIT UI REGISTRATION ---
+    public void RegisterUI(SceneUIManager ui)
     {
-        ClearReferences();
+        // Assign Panels
+        mainMenuPanel = ui.mainMenuPanel;
+        inGameHUD = ui.inGameHUD;
+        fumbleHUD = ui.fumbleHUD;
+        gameOverPanel = ui.gameOverPanel;
+        victoryPanel = ui.victoryPanel;
+        highScoreInputGroup = ui.highScoreInputGroup;
+        downNotificationPanel = ui.downNotificationPanel;
+        pausePanel = ui.pausePanel;
+        pauseSettingsPanel = ui.pauseSettingsPanel;
 
-        Canvas[] canvases = FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-        foreach (Canvas c in canvases)
-        {
-            if (c.gameObject.scene.name == null) continue;
-
-            if (inGameHUD == null) inGameHUD = FindChildRecursive(c.transform, "InGameHUD", "HUD", "GameHUD", "HUDPanel");
-            if (mainMenuPanel == null) mainMenuPanel = FindChildRecursive(c.transform, "MainMenuPanel", "MainMenu");
-            if (gameOverPanel == null) gameOverPanel = FindChildRecursive(c.transform, "GameOverPanel", "GameOver");
-            if (fumbleHUD == null) fumbleHUD = FindChildRecursive(c.transform, "FumbleHUD", "FumbleUI", "FumblePanel");
-            if (victoryPanel == null) victoryPanel = FindChildRecursive(c.transform, "VictoryPanel", "VictoryScreen");
-            if (pausePanel == null) pausePanel = FindChildRecursive(c.transform, "PausePanel", "PauseMenu");
-            if (downNotificationPanel == null) downNotificationPanel = FindChildRecursive(c.transform, "DownNotificationPanel", "DownPopup");
-        }
-
-        BindComponents();
-    }
-
-    private void BindComponents()
-    {
-        if (inGameHUD != null)
-        {
-            FixCanvasCamera(inGameHUD);
-            if (yardsText == null) yardsText = FindComponentRecursive<TextMeshProUGUI>(inGameHUD.transform, "YardsText");
-            if (downsText == null) downsText = FindComponentRecursive<TextMeshProUGUI>(inGameHUD.transform, "DownsText");
-            if (attachedText == null) attachedText = FindComponentRecursive<TextMeshProUGUI>(inGameHUD.transform, "WeightText", "AttachedText");
-        }
-
-        if (downNotificationPanel != null)
-        {
-            FixCanvasCamera(downNotificationPanel);
-            if (downNotificationText == null) downNotificationText = FindComponentRecursive<TextMeshProUGUI>(downNotificationPanel.transform, "ReasonText", "NotificationText");
-        }
-
-        if (gameOverPanel != null)
-        {
-            FixCanvasCamera(gameOverPanel);
-            if (gameOverReasonText == null) gameOverReasonText = FindComponentRecursive<TextMeshProUGUI>(gameOverPanel.transform, "ReasonText");
-
-            BindButton(gameOverPanel, "Restart", FullRestart);
-            BindButton(gameOverPanel, "Retry", FullRestart);
-            BindButton(gameOverPanel, "Menu", ReturnToMainMenu);
-            BindButton(gameOverPanel, "Quit", QuitToDesktop);
-        }
-
-        if (fumbleHUD != null)
-        {
-            FixCanvasCamera(fumbleHUD);
-            if (fumbleTimerText == null) fumbleTimerText = FindComponentRecursive<TextMeshProUGUI>(fumbleHUD.transform, "TimerText", "FumbleTimerText");
-        }
-
-        if (victoryPanel != null)
-        {
-            FixCanvasCamera(victoryPanel);
-            if (victoryTimeText == null) victoryTimeText = FindComponentRecursive<TextMeshProUGUI>(victoryPanel.transform, "TimeText");
-            if (victoryTitleText == null) victoryTitleText = FindComponentRecursive<TextMeshProUGUI>(victoryPanel.transform, "TitleText", "Victory_Text", "VictoryText");
-            if (nameInputField == null) nameInputField = FindComponentRecursive<TMP_InputField>(victoryPanel.transform, "NameInput", "Name_Input");
-
-            if (highScoreInputGroup == null && nameInputField != null)
-            {
-                Transform parent = nameInputField.transform.parent;
-                if (parent.name.Contains("Group") || parent.name.Contains("Input"))
-                    highScoreInputGroup = parent.gameObject;
-                else
-                    highScoreInputGroup = nameInputField.gameObject;
-            }
-
-            BindButton(victoryPanel, "Menu", ReturnToMainMenu);
-            BindButton(victoryPanel, "Restart", FullRestart);
-            BindButton(victoryPanel, "PlayAgain", FullRestart);
-            BindButton(victoryPanel, "Submit", SubmitScore);
-        }
-
-        if (mainMenuPanel != null)
-        {
-            FixCanvasCamera(mainMenuPanel);
-            BindButton(mainMenuPanel, "Start", StartGame);
-            BindButton(mainMenuPanel, "Play", StartGame);
-            BindButton(mainMenuPanel, "Quit", QuitToDesktop);
-        }
-
-        if (pausePanel != null)
-        {
-            FixCanvasCamera(pausePanel);
-            BindButton(pausePanel, "Resume", TogglePause);
-            BindButton(pausePanel, "Menu", ReturnToMainMenu);
-            BindButton(pausePanel, "Quit", QuitToDesktop);
-            // Ensure Try Again does full restart
-            BindButton(pausePanel, "Retry", FullRestart);
-            BindButton(pausePanel, "Restart", FullRestart);
-        }
-    }
-
-    private void BindButton(GameObject panel, string partialName, UnityEngine.Events.UnityAction action)
-    {
-        Button btn = FindComponentRecursive<Button>(panel.transform, partialName);
-        if (btn != null)
-        {
-            if (Application.platform == RuntimePlatform.WebGLPlayer &&
-               (partialName.Contains("Quit") || action == QuitToDesktop))
-            {
-                btn.gameObject.SetActive(false);
-                return;
-            }
-
-            btn.onClick.RemoveAllListeners();
-            btn.onClick.AddListener(action);
-        }
-    }
-
-    private void ClearReferences()
-    {
-        mainMenuPanel = null; inGameHUD = null; gameOverPanel = null;
-        fumbleHUD = null; victoryPanel = null; pausePanel = null; downNotificationPanel = null;
-        if (yardsText != null && yardsText.gameObject == null) yardsText = null;
-    }
-
-    private void FixCanvasCamera(GameObject uiObject)
-    {
-        Canvas c = uiObject.GetComponent<Canvas>();
-        if (c == null) c = uiObject.GetComponentInParent<Canvas>();
-        if (c != null && c.renderMode == RenderMode.ScreenSpaceCamera && c.worldCamera == null)
-            c.worldCamera = Camera.main;
-    }
-
-    private GameObject FindChildRecursive(Transform parent, params string[] names)
-    {
-        foreach (string n in names)
-            if (parent.name.Equals(n, System.StringComparison.OrdinalIgnoreCase)) return parent.gameObject;
-
-        foreach (Transform child in parent)
-        {
-            GameObject result = FindChildRecursive(child, names);
-            if (result != null) return result;
-        }
-        return null;
-    }
-
-    private T FindComponentRecursive<T>(Transform parent, params string[] names) where T : Component
-    {
-        foreach (string n in names)
-        {
-            if (parent.name.IndexOf(n, System.StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                T comp = parent.GetComponent<T>();
-                if (comp != null) return comp;
-            }
-        }
-
-        foreach (Transform child in parent)
-        {
-            T result = FindComponentRecursive<T>(child, names);
-            if (result != null) return result;
-        }
-        return null;
+        // Assign Texts & Inputs
+        yardsText = ui.yardsText;
+        downsText = ui.downsText;
+        attachedText = ui.attachedText;
+        fumbleTimerText = ui.fumbleTimerText;
+        gameOverReasonText = ui.gameOverReasonText;
+        victoryTimeText = ui.victoryTimeText;
+        downNotificationText = ui.downNotificationText;
+        nameInputField = ui.nameInputField;
+        victoryTitleText = ui.victoryTitleText;
     }
 
     void Update()
@@ -468,8 +331,15 @@ public class GameManager : MonoBehaviour
 
     public void TogglePause()
     {
-        if (currentState == GameState.Playing || currentState == GameState.Fumble) SetState(GameState.Paused);
-        else if (currentState == GameState.Paused) SetState(GameState.Playing);
+        if (currentState == GameState.Playing || currentState == GameState.Fumble)
+        {
+            stateBeforePause = currentState; // Remember if we were playing or fumbling
+            SetState(GameState.Paused);
+        }
+        else if (currentState == GameState.Paused)
+        {
+            SetState(stateBeforePause); // Restore the correct state
+        }
     }
 
     public void ReturnToMainMenu()

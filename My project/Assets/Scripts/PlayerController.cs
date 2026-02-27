@@ -54,6 +54,11 @@ public class PlayerController : MonoBehaviour
     private float _gravity;
     private float _jumpVelocity;
     private float _horizontalInput;
+    private bool _wantsToJump; // NEW: Decouples input from physics
+
+    // Cached Layers (Optimization)
+    private int playerLayer;
+    private int enemyLayer;
 
     // Timers
     private float _coyoteTimer;
@@ -77,6 +82,10 @@ public class PlayerController : MonoBehaviour
         impulseSource = GetComponent<CinemachineImpulseSource>();
         audioSource = GetComponent<AudioSource>();
         spriteRenderer = GetComponent<SpriteRenderer>();
+
+        // Cache physics layers
+        playerLayer = gameObject.layer;
+        enemyLayer = LayerMask.NameToLayer("Enemy");
 
         // Physics Setup
         rb.gravityScale = 0;
@@ -139,6 +148,13 @@ public class PlayerController : MonoBehaviour
 
         if (isProne || isSpinning) return;
 
+        // NEW: Apply synchronized jump logic right before calculations
+        if (_wantsToJump)
+        {
+            ExecuteJump();
+            _wantsToJump = false;
+        }
+
         CalculateMovement();
         HandleCornerCorrection();
 
@@ -148,23 +164,17 @@ public class PlayerController : MonoBehaviour
     // --- OUT OF BOUNDS LOGIC ---
     public void OutOfBounds()
     {
-        // Stop the player in their tracks so they don't fall forever
         _velocity = Vector2.zero;
         rb.linearVelocity = Vector2.zero;
         rb.simulated = false;
 
-        // Hide player so they don't awkwardly float in the void
         if (spriteRenderer) spriteRenderer.enabled = false;
-
-        // Guarantee a fumble so the play ends visually
         if (hasPackage) ProcessFumble(1.0f);
 
-        // Visual / Audio Feedback
         if (CameraController.Instance) CameraController.Instance.Shake(2f);
         if (EffectManager.Instance)
             EffectManager.Instance.PlayEffect(EffectManager.Instance.fumbleExplosionPrefab, transform.position);
 
-        // Tell the GameManager to burn a down
         if (GameManager.Instance)
         {
             GameManager.Instance.UseDown();
@@ -245,7 +255,12 @@ public class PlayerController : MonoBehaviour
         _horizontalInput = GameInput.Instance.GetMovementInput().x;
 
         if (GameInput.Instance.GetJumpDown()) _jumpBufferTimer = stats.jumpBufferTime;
-        if (_jumpBufferTimer > 0 && (_coyoteTimer > 0 || isInQuicksand)) ExecuteJump();
+
+        // UPDATED: Signal intent rather than immediate execution
+        if (_jumpBufferTimer > 0 && (_coyoteTimer > 0 || isInQuicksand))
+        {
+            _wantsToJump = true;
+        }
 
         if (GameInput.Instance.GetSpinDown() && !isSpinning) StartCoroutine(PerformSpinMove());
         if (GameInput.Instance.GetStiffArmDown() && !isStiffArming) PerformStiffArm();
@@ -347,8 +362,7 @@ public class PlayerController : MonoBehaviour
         anim.SetTrigger("SpinTrigger");
         if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.spinTrailPrefab, transform.position);
 
-        int playerLayer = gameObject.layer;
-        int enemyLayer = LayerMask.NameToLayer("Enemy");
+        // UPDATED: Now utilizes cached integer lookups
         Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, true);
 
         if (attachmentCount == 0)
@@ -405,11 +419,13 @@ public class PlayerController : MonoBehaviour
         if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.jukeGhostPrefab, transform.position);
 
         spriteRenderer.color = stats.jukeColor;
-        Physics2D.IgnoreLayerCollision(gameObject.layer, LayerMask.NameToLayer("Enemy"), true);
+
+        // UPDATED: Now utilizes cached integer lookups
+        Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, true);
 
         yield return new WaitForSeconds(stats.jukeDuration);
 
-        Physics2D.IgnoreLayerCollision(gameObject.layer, LayerMask.NameToLayer("Enemy"), false);
+        Physics2D.IgnoreLayerCollision(playerLayer, enemyLayer, false);
         spriteRenderer.color = normalColor;
         isJuking = false;
     }

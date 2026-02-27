@@ -30,13 +30,14 @@ public abstract class EnemyAI : MonoBehaviour
     public float giveUpDuration = 2.0f;
     private float targetIgnoreTimer;
     private float stuckCheckTimer = 0f;
-    private float stuckThreshold = 0.2f;
     private float lastXPosition;
+    protected bool isWaiting = false; // Prevents "stuck" jumps at waypoints
 
     [Header("Package Logic")]
     public bool carriesPackage = false;
     public Transform packageHoldPoint;
     public float fleeRangeMultiplier = 2.0f;
+    protected Package currentHeldPackage;
 
     [Header("State Info")]
     protected bool movingRight = true;
@@ -77,12 +78,21 @@ public abstract class EnemyAI : MonoBehaviour
         movingRight = transform.localScale.x > 0;
     }
 
+    public void AssignPatrolRoute(Transform[] newWaypoints)
+    {
+        patrolPoints = newWaypoints;
+        currentPatrolIndex = 0;
+        patrolWaitTimer = 0f;
+    }
+
     protected virtual void FixedUpdate()
     {
         if (flipCooldownTimer > 0) flipCooldownTimer -= Time.fixedDeltaTime;
         if (isKnockedBack || !enabled) return;
 
         MonitorStuckState();
+
+        isWaiting = false; // Reset waiting status every frame
 
         if (carriesPackage)
         {
@@ -103,18 +113,7 @@ public abstract class EnemyAI : MonoBehaviour
 
         if (isChasing && currentTarget != null)
         {
-            if (CheckWallAhead())
-            {
-                if (!AttemptNavigationJump())
-                {
-                    rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
-                    ForceGiveUp();
-                }
-            }
-            else
-            {
-                Chase();
-            }
+            Chase();
         }
         else
         {
@@ -124,24 +123,27 @@ public abstract class EnemyAI : MonoBehaviour
 
     private void MonitorStuckState()
     {
-        if (Mathf.Abs(rb.linearVelocity.x) > 0.1f || isChasing || carriesPackage)
+        if (isWaiting)
+        {
+            stuckCheckTimer = 0;
+            lastXPosition = transform.position.x;
+            return;
+        }
+
+        if (Mathf.Abs(rb.linearVelocity.x) > 0.1f || isChasing || carriesPackage || patrolPoints.Length > 0)
         {
             float distMoved = Mathf.Abs(transform.position.x - lastXPosition);
 
-            if (distMoved < 0.02f)
+            if (distMoved < 0.01f)
             {
                 stuckCheckTimer += Time.fixedDeltaTime;
-                if (stuckCheckTimer > stuckThreshold)
+
+                if (stuckCheckTimer > 0.1f) AttemptNavigationJump();
+
+                if (stuckCheckTimer > 1.5f)
                 {
-                    // Stuck logic
-                    if (!isChasing && !carriesPackage)
-                    {
-                        SwitchPatrolPoint();
-                    }
-                    else
-                    {
-                        if (!AttemptNavigationJump()) { Flip(); if (isChasing) ForceGiveUp(); }
-                    }
+                    if (!isChasing && !carriesPackage) SwitchPatrolPoint();
+                    else { Flip(); if (isChasing) ForceGiveUp(); }
                     stuckCheckTimer = 0;
                 }
             }
@@ -153,45 +155,55 @@ public abstract class EnemyAI : MonoBehaviour
         lastXPosition = transform.position.x;
     }
 
-    protected bool CheckWallAhead()
+    // FIX: Replaced thin raycasts with a comprehensive vertical BoxCast.
+    // Accepts a distance parameter so they can look further ahead for upcoming floating steps.
+    protected bool CheckWallAhead(float dist = 0.8f)
     {
         if (flipCooldownTimer > 0) return false;
 
-        Vector2 pos = transform.position;
         Vector2 dir = movingRight ? Vector2.right : Vector2.left;
-        float dist = 0.8f;
 
-        bool hitTop = Physics2D.Raycast(pos + Vector2.up * 0.8f, dir, dist, obstacleLayer);
-        bool hitMid = Physics2D.Raycast(pos + Vector2.up * 0.4f, dir, dist, obstacleLayer);
-        bool hitBot = Physics2D.Raycast(pos + Vector2.up * 0.1f, dir, dist, obstacleLayer);
+        // A box 2.4 units tall covers from slightly below their feet to above their head.
+        // Guarantees NO floating stairs or thin platforms can slip through undetected.
+        Vector2 boxSize = new Vector2(0.1f, 2.4f);
+        Vector2 boxCenter = (Vector2)transform.position + Vector2.up * 0.5f;
 
-        return hitTop || hitMid || hitBot;
+        RaycastHit2D hit = Physics2D.BoxCast(boxCenter, boxSize, 0f, dir, dist, obstacleLayer);
+
+        return hit.collider != null;
     }
 
     protected bool CheckHazardAhead()
     {
-        Vector2 origin = (Vector2)transform.position + (movingRight ? Vector2.right : Vector2.left) * 0.8f;
-        RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, 1.5f);
+        Vector2 origin = (Vector2)transform.position + (movingRight ? Vector2.right : Vector2.left) * 0.6f + Vector2.down * 0.7f;
+
+        // Cast down 3 units (3 blocks) to check for a safe floor to drop onto
+        RaycastHit2D hit = Physics2D.Raycast(origin, Vector2.down, 3.0f, obstacleLayer);
 
         if (hit.collider != null)
         {
-            if (hit.collider.GetComponent<WaterHazard>()) return true;
-            if (hit.collider.CompareTag("Water")) return true;
+            if (hit.collider.GetComponent<WaterHazard>() || hit.collider.CompareTag("Water"))
+                return true; // Water is a hazard
+
+            return false; // Safe ground found within 3 blocks, not a cliff! Let them drop down.
         }
-        else
-        {
-            return true; // Cliff
-        }
-        return false;
+
+        return true; // No ground within 3 blocks -> it's a true cliff, turn around
+    }
+
+    // HELPER: Verifies the minion is actually touching the floor
+    protected bool IsGrounded()
+    {
+        Vector2 pos = transform.position;
+        return Physics2D.Raycast(pos + Vector2.left * 0.3f, Vector2.down, 1.2f, obstacleLayer) ||
+               Physics2D.Raycast(pos + Vector2.right * 0.3f, Vector2.down, 1.2f, obstacleLayer);
     }
 
     protected bool AttemptNavigationJump()
     {
-        if (Time.time < lastJumpTime + jumpCooldown) return false;
+        if (Time.time < lastJumpTime + 0.15f) return false;
 
-        bool isGrounded = Physics2D.Raycast(transform.position, Vector2.down, 1.1f, obstacleLayer);
-
-        if (isGrounded)
+        if (IsGrounded())
         {
             rb.linearVelocity = new Vector2(rb.linearVelocity.x, navigationJumpForce);
             lastJumpTime = Time.time;
@@ -250,11 +262,6 @@ public abstract class EnemyAI : MonoBehaviour
                 lastPatrolSwitchTime = Time.time;
                 Flip();
             }
-            else
-            {
-                // If stuck again immediately, THEN jump
-                AttemptNavigationJump();
-            }
         }
     }
 
@@ -262,61 +269,68 @@ public abstract class EnemyAI : MonoBehaviour
     {
         if (patrolPoints == null || patrolPoints.Length == 0) return;
 
-        if (CheckHazardAhead()) { SwitchPatrolPoint(); return; }
-
-        // FIX: Prioritize Switching over Jumping for Patrol
-        if (CheckWallAhead())
-        {
-            rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
-            SwitchPatrolPoint();
-            return;
-        }
-
         Transform targetPoint = patrolPoints[currentPatrolIndex];
         float dist = Mathf.Abs(transform.position.x - targetPoint.position.x);
 
         if (dist < 0.5f)
         {
+            isWaiting = true;
             rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
             patrolWaitTimer += Time.fixedDeltaTime;
             if (patrolWaitTimer > waitAtWaypointTime)
             {
                 SwitchPatrolPoint();
             }
+            return;
         }
-        else
+
+        // 1. Is there a wall/stair right in front of us? Jump it!
+        if (CheckWallAhead(0.8f))
         {
-            float dir = Mathf.Sign(targetPoint.position.x - transform.position.x);
-            Move(dir, moveSpeed * 0.8f);
+            AttemptNavigationJump();
         }
+        else if (IsGrounded())
+        {
+            // 2. We don't see a wall right here. But is there a floating step slightly further ahead?
+            bool stepComingUp = CheckWallAhead(1.8f);
+
+            // 3. If there is NO step coming up, AND it's a bottomless pit, turn around!
+            // (If a step IS coming up, we bravely ignore the empty gap beneath it and keep walking!)
+            if (!stepComingUp && CheckHazardAhead())
+            {
+                SwitchPatrolPoint();
+                return;
+            }
+        }
+
+        float dir = Mathf.Sign(targetPoint.position.x - transform.position.x);
+        Move(dir, moveSpeed * 0.8f);
     }
 
     protected void RunAway()
     {
         if (playerTransform == null) return;
 
-        if (CheckHazardAhead()) { Flip(); return; }
-
-        if (CheckWallAhead())
+        // Apply the same smart floating-step gap logic to fleeing!
+        if (CheckWallAhead(0.8f))
         {
-            if (!AttemptNavigationJump())
+            AttemptNavigationJump();
+        }
+        else if (IsGrounded())
+        {
+            bool stepComingUp = CheckWallAhead(1.8f);
+            if (!stepComingUp && CheckHazardAhead())
             {
-                rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
                 Flip();
+                return;
             }
         }
 
         float dir = (transform.position.x > playerTransform.position.x) ? 1 : -1;
         float dist = Vector2.Distance(transform.position, playerTransform.position);
 
-        if (dist > detectionRange * fleeRangeMultiplier)
-        {
-            rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
-        }
-        else
-        {
-            Move(dir, moveSpeed * 1.5f);
-        }
+        if (dist > detectionRange * fleeRangeMultiplier) rb.linearVelocity = new Vector2(0, rb.linearVelocity.y);
+        else Move(dir, moveSpeed * 1.5f);
     }
 
     protected void Move(float direction, float speed)
@@ -341,10 +355,18 @@ public abstract class EnemyAI : MonoBehaviour
     public void DropPackage()
     {
         carriesPackage = false;
-        if (GameManager.Instance && GameManager.Instance.currentPackageTransform)
+        if (currentHeldPackage != null)
         {
-            Package pkg = GameManager.Instance.currentPackageTransform.GetComponent<Package>();
-            if (pkg && pkg.currentHolder == this) pkg.SetHeld(false, null, null);
+            if (currentHeldPackage.currentHolder == this.gameObject)
+            {
+                currentHeldPackage.SetHeld(false, null, null);
+
+                if (selfCollider && currentHeldPackage.TryGetComponent<Collider2D>(out var pkgCol))
+                {
+                    Physics2D.IgnoreCollision(selfCollider, pkgCol, false);
+                }
+            }
+            currentHeldPackage = null;
         }
     }
 
@@ -370,6 +392,11 @@ public abstract class EnemyAI : MonoBehaviour
         flipCooldownTimer = minTimeBetweenFlips;
     }
 
+    protected virtual void Die()
+    {
+        Destroy(gameObject);
+    }
+
     protected virtual void OnCollisionEnter2D(Collision2D collision)
     {
         if (!carriesPackage && collision.gameObject.CompareTag("Package"))
@@ -377,14 +404,17 @@ public abstract class EnemyAI : MonoBehaviour
             if (collision.gameObject.TryGetComponent<Package>(out var pkg) && !pkg.isHeld)
             {
                 carriesPackage = true;
+                currentHeldPackage = pkg;
                 pkg.SetHeld(true, packageHoldPoint, this);
+
+                if (selfCollider) Physics2D.IgnoreCollision(selfCollider, collision.collider, true);
             }
         }
         if (isKnockedBack && ((1 << collision.gameObject.layer) & obstacleLayer) != 0)
         {
             if (EffectManager.Instance) EffectManager.Instance.PlayEffect(EffectManager.Instance.bloodSplatterPrefab, collision.contacts[0].point);
             if (carriesPackage) DropPackage();
-            Destroy(gameObject);
+            Die();
         }
     }
 
