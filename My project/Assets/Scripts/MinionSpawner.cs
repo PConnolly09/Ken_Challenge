@@ -1,5 +1,5 @@
 using UnityEngine;
-using UnityEngine.Pool;
+using System.Collections.Generic;
 
 public class MinionSpawner : MonoBehaviour
 {
@@ -7,46 +7,29 @@ public class MinionSpawner : MonoBehaviour
     public GameObject minionPrefab;
     public int maxActiveMinions = 5;
     public float spawnInterval = 3f;
-    public float spawnRadius = 1f; // Spawns directly around THIS spawner object
+    public float spawnRadius = 1f;
 
     [Header("Minion Patrol Route")]
     [Tooltip("Drag your scene waypoints here. The spawner will hand them to the minions when they spawn.")]
     public Transform[] patrolWaypoints;
 
-    private int currentActive = 0;
     private float spawnTimer;
 
-    private ObjectPool<GameObject> pool;
+    // FIX: Replaced strict Unity Pool with a robust manual pool that survives external Destroys (DeathZones)
+    private List<GameObject> activeMinions = new List<GameObject>();
+    private Queue<GameObject> inactiveMinions = new Queue<GameObject>();
 
     void Awake()
     {
-        pool = new ObjectPool<GameObject>(
-            createFunc: () => {
-                GameObject obj = Instantiate(minionPrefab);
-                PooledMinion helper = obj.AddComponent<PooledMinion>();
-                helper.spawner = this;
-                return obj;
-            },
-            actionOnGet: (obj) => {
-                obj.SetActive(true);
-                currentActive++;
-            },
-            actionOnRelease: (obj) => {
-                obj.SetActive(false);
-                currentActive--;
-            },
-            actionOnDestroy: (obj) => Destroy(obj),
-            collectionCheck: false,
-            defaultCapacity: maxActiveMinions,
-            maxSize: 20
-        );
-
         spawnTimer = spawnInterval;
     }
 
     void Update()
     {
-        if (currentActive < maxActiveMinions)
+        // Bulletproof cleanup: Removes any minions destroyed externally (like falling in a pit)
+        activeMinions.RemoveAll(item => item == null);
+
+        if (activeMinions.Count < maxActiveMinions)
         {
             spawnTimer -= Time.deltaTime;
             if (spawnTimer <= 0)
@@ -59,11 +42,26 @@ public class MinionSpawner : MonoBehaviour
 
     void SpawnMinion()
     {
-        GameObject minion = pool.Get();
-        // Spawn around the Spawner itself
-        minion.transform.position = transform.position + (Vector3)Random.insideUnitCircle * spawnRadius;
+        GameObject minion = null;
 
-        // Reset state and hand over the Scene Waypoints!
+        // Try to grab from the inactive pool first
+        while (inactiveMinions.Count > 0 && minion == null)
+        {
+            minion = inactiveMinions.Dequeue();
+        }
+
+        // If pool is empty, create a new one
+        if (minion == null)
+        {
+            minion = Instantiate(minionPrefab);
+            PooledMinion helper = minion.AddComponent<PooledMinion>();
+            helper.spawner = this;
+        }
+
+        minion.transform.position = transform.position + (Vector3)Random.insideUnitCircle * spawnRadius;
+        minion.SetActive(true);
+        activeMinions.Add(minion);
+
         if (minion.TryGetComponent<EnemyAI>(out var ai))
         {
             ai.enabled = true;
@@ -82,18 +80,20 @@ public class MinionSpawner : MonoBehaviour
 
     public void ReturnToPool(GameObject minion)
     {
-        pool.Release(minion);
+        if (minion != null)
+        {
+            minion.SetActive(false);
+            activeMinions.Remove(minion);
+            inactiveMinions.Enqueue(minion);
+        }
     }
 
-    // DRAW GIZMOS FOR SPAWNER & WAYPOINT VISUALIZATION
     void OnDrawGizmos()
     {
-        // Draw Spawner Area (Green)
         Gizmos.color = new Color(0f, 1f, 0f, 0.4f);
         Gizmos.DrawSphere(transform.position, spawnRadius);
         Gizmos.DrawWireSphere(transform.position, spawnRadius);
 
-        // Draw Waypoint Path (Cyan)
         if (patrolWaypoints != null && patrolWaypoints.Length > 0)
         {
             Gizmos.color = Color.cyan;
@@ -109,7 +109,6 @@ public class MinionSpawner : MonoBehaviour
                 }
             }
 
-            // Draw a faded line from Spawner to the First Waypoint
             if (patrolWaypoints[0] != null)
             {
                 Gizmos.color = new Color(0f, 1f, 1f, 0.3f);
@@ -119,7 +118,6 @@ public class MinionSpawner : MonoBehaviour
     }
 }
 
-// Helper class attached dynamically to handle callbacks to the pool
 public class PooledMinion : MonoBehaviour
 {
     public MinionSpawner spawner;
